@@ -25,8 +25,17 @@ jobs:
         run: go test -race -count=1 -timeout 10m ./...
       - name: govulncheck
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
-          govulncheck ./...
+          # A flake in the module proxy or the vuln-DB fetch must not fake a red build,
+          # and a real finding must not be laundered by a retry: a genuine vulnerability
+          # fails every attempt just like a persistent error does.
+          for attempt in 1 2 3; do
+            if go install golang.org/x/vuln/cmd/govulncheck@v1.1.4 && govulncheck ./...; then
+              exit 0
+            fi
+            echo "govulncheck attempt $attempt of 3 failed; retrying"
+            sleep 5
+          done
+          exit 1
 
   test-windows:
     runs-on: windows-latest
