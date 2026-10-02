@@ -3,9 +3,13 @@
 // Every verdict is printed with the evidence that produced it, and every injection finding is
 // printed as a quote, because the output of a security tool is only useful if the reader can
 // disagree with it line by line. Colour is used sparingly and only to rank, never to inform.
+//
+// The machine-readable forms (WriteJSON, WriteDriftJSON) carry the same information as the prose -
+// a pipeline and a person are two readers of one report, not two reports.
 package report
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"sort"
@@ -18,10 +22,33 @@ import (
 
 // Server is one server's full scan, ready to print.
 type Server struct {
-	ID       string
-	Source   string
-	Tools    []risk.Assessment
-	Findings map[string][]injection.Finding
+	ID       string                       `json:"id"`
+	Source   string                       `json:"source"`
+	Tools    []risk.Assessment            `json:"tools"`
+	Findings map[string][]injection.Finding `json:"findings"`
+}
+
+// WriteJSON emits the same report Write prints, as one JSON document - for CI, for a dashboard,
+// for whatever reads reports instead of people. One document, one newline, no progress chatter:
+// a pipeline should never have to guess which lines were the report.
+func WriteJSON(w io.Writer, server Server) error {
+	encoded, err := json.Marshal(server)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(append(encoded, '\n'))
+	return err
+}
+
+// WriteDriftJSON emits a drift comparison as one JSON document, carrying the same fields the prose
+// report argues from - including `breaking`, which is the signal a pipeline acts on.
+func WriteDriftJSON(w io.Writer, comparison drift.Report) error {
+	encoded, err := json.Marshal(comparison)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(append(encoded, '\n'))
+	return err
 }
 
 // Write prints a full report for one server.
@@ -51,8 +78,8 @@ func Write(w io.Writer, server Server) error {
 			}
 		}
 		for _, finding := range server.Findings[tool.Tool] {
-			if _, err := fmt.Fprintf(w, "      ! %s/%s: %q\n",
-				finding.Severity, finding.Kind, finding.Quote); err != nil {
+			if _, err := fmt.Fprintf(w, "      ! %s %s/%s: %q\n",
+				finding.OWASP, finding.Severity, finding.Kind, finding.Quote); err != nil {
 				return err
 			}
 		}

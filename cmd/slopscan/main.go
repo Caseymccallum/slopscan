@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -39,10 +40,15 @@ func main() {
 
 	var dbPath string
 	root.PersistentFlags().StringVar(&dbPath, "db", "slopscan.db", "path to the local catalogue")
+	// One format flag for every command that produces a report, so a pipeline never has to know
+	// which subcommand forgot it.
+	var format string
+	root.PersistentFlags().StringVar(&format, "format", "text", `output format: "text" or "json"`)
 
 	root.AddCommand(
-		scanCommand(&dbPath), probeCommand(&dbPath), dbCommand(&dbPath),
-		pinCommand(&dbPath), driftCommand(&dbPath), namesCommand(), versionCommand(),
+		scanCommand(&dbPath, &format), probeCommand(&dbPath, &format), watchCommand(&dbPath, &format),
+		dbCommand(&dbPath, &format), pinCommand(&dbPath), driftCommand(&dbPath, &format),
+		namesCommand(), versionCommand(),
 	)
 	if err := root.Execute(); err != nil {
 		// Exit 3 for a broken baseline contract (the signal CI greps for), 1 for everything else.
@@ -61,7 +67,7 @@ type BreakingError struct{ Message string }
 func (e *BreakingError) Error() string { return e.Message }
 
 // scanCommand reads a tool list (a JSON file of tools, as `tools/list` returns) and reports.
-func scanCommand(dbPath *string) *cobra.Command {
+func scanCommand(dbPath, format *string) *cobra.Command {
 	var source string
 	var serverID string
 
@@ -82,7 +88,7 @@ func scanCommand(dbPath *string) *cobra.Command {
 				return fmt.Errorf("%s is not a tools list (%v)", args[0], err)
 			}
 
-			return analyse(cmd, *dbPath, serverID, source, payload.Tools)
+			return analyse(cmd, *dbPath, *format, serverID, source, payload.Tools)
 		},
 	}
 
@@ -97,7 +103,10 @@ func scanCommand(dbPath *string) *cobra.Command {
 //
 // When a baseline has been pinned for this server, the same pass also compares against it and says
 // so in the report - because the moment that matters is the second scan, not the first.
-func analyse(cmd *cobra.Command, dbPath, serverID, source string, tools []risk.Tool) error {
+// evaluate runs the pipeline once: classify every tool, scan every description, record the
+// verdict, and compare with the pinned baseline. It prints nothing - the two callers (a one-shot
+// scan and a watch loop) decide how to say what it found.
+func evaluate(dbPath, serverID, source string, tools []risk.Tool) (report.Server, *drift.Report, error) {
 	assessments := make([]risk.Assessment, 0, len(tools))
 	findings := map[string][]injection.Finding{}
 	for _, tool := range tools {
@@ -109,38 +118,58 @@ func analyse(cmd *cobra.Command, dbPath, serverID, source string, tools []risk.T
 
 	cat, err := catalogue.Open(dbPath)
 	if err != nil {
-		return err
+		return report.Server{}, nil, err
 	}
 	defer cat.Close()
 	if err := cat.Record(serverID, source, tools, assessments, findings); err != nil {
-		return err
+		return report.Server{}, nil, err
 	}
 
-	if err := report.Write(cmd.OutOrStdout(), report.Server{
-		ID: serverID, Source: source, Tools: assessments, Findings: findings,
-	}); err != nil {
-		return err
-	}
-
-	return reportDrift(cmd, cat, serverID, tools)
-}
-
-// reportDrift compares this scan with the pinned baseline, if there is one. A first scan against
-// no baseline says nothing; every later one answers the only question that matters after review:
-// is the server still saying what it said when it was approved?
-func reportDrift(cmd *cobra.Command, cat *catalogue.Catalogue, serverID string, current []risk.Tool) error {
+	view := report.Server{ID: serverID, Source: source, Tools: assessments, Findings: findings}
 	baseline, err := cat.Baseline(serverID)
 	if err != nil || len(baseline) == 0 {
+		return view, nil, err
+	}
+	comparison := drift.Compare(baseline, tools)
+	return view, &comparison, nil
+}
+
+func analyse(cmd *cobra.Command, dbPath, format, serverID, source string, tools []risk.Tool) error {
+	view, comparison, err := evaluate(dbPath, serverID, source, tools)
+	if err != nil {
 		return err
 	}
 
-	comparison := drift.Compare(baseline, current)
-	if !comparison.Drifted {
-		fmt.Fprintf(cmd.OutOrStdout(), "\nvs pinned baseline: unchanged (%d tools).\n", comparison.Unchanged)
+	if format == "json" {
+		if err := report.WriteJSON(cmd.OutOrStdout(), view); err != nil {
+			return err
+		}
+	} else if err := report.Write(cmd.OutOrStdout(), view); err != nil {
+		return err
+	}
+
+	return reportDrift(cmd, format, comparison)
+}
+
+// reportDrift says what the comparison found, in the format asked for. No baseline is silence for
+// a first scan - there is nothing to compare against, and saying so every time would be noise.
+func reportDrift(cmd *cobra.Command, format string, comparison *drift.Report) error {
+	if comparison == nil {
 		return nil
 	}
 
-	if err := report.WriteDrift(cmd.OutOrStdout(), comparison); err != nil {
+	if !comparison.Drifted {
+		if format != "json" {
+			fmt.Fprintf(cmd.OutOrStdout(), "\nvs pinned baseline: unchanged (%d tools).\n", comparison.Unchanged)
+		}
+		return nil
+	}
+
+	if format == "json" {
+		if err := report.WriteDriftJSON(cmd.OutOrStdout(), *comparison); err != nil {
+			return err
+		}
+	} else if err := report.WriteDrift(cmd.OutOrStdout(), *comparison); err != nil {
 		return err
 	}
 	// The same contract as the drift command: a breaking change fails the run, so CI stops on a
@@ -155,7 +184,7 @@ func reportDrift(cmd *cobra.Command, cat *catalogue.Catalogue, serverID string, 
 //
 // The server is started by slopscan and killed when the listing is done: a probe asks one question
 // and calls no tools. Everything after the listing is the same pipeline a file scan runs.
-func probeCommand(dbPath *string) *cobra.Command {
+func probeCommand(dbPath, format *string) *cobra.Command {
 	var serverID string
 
 	command := &cobra.Command{
@@ -174,11 +203,94 @@ func probeCommand(dbPath *string) *cobra.Command {
 			if len(args) > 1 {
 				source += " (and its arguments)"
 			}
-			return analyse(cmd, *dbPath, serverID, source, tools)
+			return analyse(cmd, *dbPath, *format, serverID, source, tools)
 		},
 	}
 
 	command.Flags().StringVar(&serverID, "id", "probed", "the server's identity in the catalogue")
+	return command
+}
+
+// watchCommand re-asks the same safe question on a timer - the "continuous re-probing" half of
+// the rug-pull mitigation that pin+drift alone only half-implements. Every interval it starts the
+// server, reads its tool list, kills it, and compares against the pinned baseline. The first
+// breaking change ends the watch with exit 3: the point of watching is to stop when something
+// happens, not to accumulate observations forever.
+func watchCommand(dbPath, format *string) *cobra.Command {
+	var serverID string
+	var interval time.Duration
+	var count int
+
+	command := &cobra.Command{
+		Use:   "watch -- <server command> [args...]",
+		Short: "Probe a live server on an interval and stop at the first change to its tool surface",
+		Long: "Continuously re-probes a running MCP server: every interval, read the tool list and " +
+			"compare it with the pinned baseline. Prints one line per quiet probe in text mode; " +
+			"the first change to the tool surface ends the watch with the drift report printed - " +
+			"exit 3 when the change is breaking, exit 0 when it is additions only. A probe never " +
+			"calls a tool - this is the same safe question, asked again.",
+		Args: cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cat, err := catalogue.Open(*dbPath)
+			if err != nil {
+				return err
+			}
+			baseline, err := cat.Baseline(serverID)
+			cat.Close()
+			if err != nil {
+				return err
+			}
+			if len(baseline) == 0 {
+				return fmt.Errorf("no pinned baseline for %s - pin one before watching", serverID)
+			}
+
+			source := args[0]
+			for round := 1; count <= 0 || round <= count; round++ {
+				tools, err := probe.Tools(cmd.Context(), args[0], args[1:]...)
+				if err != nil {
+					return fmt.Errorf("probe %d: %w", round, err)
+				}
+
+				_, comparison, err := evaluate(*dbPath, serverID, source, tools)
+				if err != nil {
+					return err
+				}
+				if comparison != nil && comparison.Drifted {
+					// The watch ends on any change - noticing is its whole purpose - but the
+					// exit code keeps the general contract: 3 only when the baseline broke.
+					if *format == "json" {
+						if err := report.WriteDriftJSON(cmd.OutOrStdout(), *comparison); err != nil {
+							return err
+						}
+					} else if err := report.WriteDrift(cmd.OutOrStdout(), *comparison); err != nil {
+						return err
+					}
+					if comparison.Breaking {
+						return &BreakingError{Message: "tool surface changed while watching"}
+					}
+					return nil
+				}
+
+				if *format != "json" {
+					fmt.Fprintf(cmd.OutOrStdout(), "probe %d: unchanged.\n", round)
+				}
+
+				if count > 0 && round >= count {
+					break
+				}
+				select {
+				case <-cmd.Context().Done():
+					return cmd.Context().Err()
+				case <-time.After(interval):
+				}
+			}
+			return nil
+		},
+	}
+
+	command.Flags().StringVar(&serverID, "id", "probed", "the server's identity in the catalogue")
+	command.Flags().DurationVar(&interval, "interval", time.Minute, "time between probes")
+	command.Flags().IntVar(&count, "count", 0, "number of probes to run; 0 watches until interrupted")
 	return command
 }
 
@@ -215,7 +327,7 @@ func pinCommand(dbPath *string) *cobra.Command {
 // driftCommand answers the question a re-scan raises: is the server still saying what it said
 // when it was approved? It reads both sides from the catalogue, so it works in CI without
 // touching the server at all.
-func driftCommand(dbPath *string) *cobra.Command {
+func driftCommand(dbPath, format *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "drift <id>",
 		Short: "Compare a server's current tools against its pinned baseline",
@@ -245,10 +357,20 @@ func driftCommand(dbPath *string) *cobra.Command {
 
 			comparison := drift.Compare(baseline, current)
 			if !comparison.Drifted {
-				fmt.Fprintf(cmd.OutOrStdout(), "%s: unchanged against its pinned baseline (%d tools).\n", args[0], comparison.Unchanged)
+				if *format == "json" {
+					if err := report.WriteDriftJSON(cmd.OutOrStdout(), comparison); err != nil {
+						return err
+					}
+				} else {
+					fmt.Fprintf(cmd.OutOrStdout(), "%s: unchanged against its pinned baseline (%d tools).\n", args[0], comparison.Unchanged)
+				}
 				return nil
 			}
-			if err := report.WriteDrift(cmd.OutOrStdout(), comparison); err != nil {
+			if *format == "json" {
+				if err := report.WriteDriftJSON(cmd.OutOrStdout(), comparison); err != nil {
+					return err
+				}
+			} else if err := report.WriteDrift(cmd.OutOrStdout(), comparison); err != nil {
 				return err
 			}
 			if comparison.Breaking {
@@ -260,7 +382,7 @@ func driftCommand(dbPath *string) *cobra.Command {
 }
 
 // dbCommand browses the catalogue: everything scanned, and one server in detail.
-func dbCommand(dbPath *string) *cobra.Command {
+func dbCommand(dbPath, format *string) *cobra.Command {
 	db := &cobra.Command{
 		Use:   "db",
 		Short: "Browse the local catalogue of scanned servers",
@@ -321,9 +443,11 @@ func dbCommand(dbPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return report.Write(cmd.OutOrStdout(), report.Server{
-				ID: args[0], Source: source, Tools: tools, Findings: findings,
-			})
+			view := report.Server{ID: args[0], Source: source, Tools: tools, Findings: findings}
+			if *format == "json" {
+				return report.WriteJSON(cmd.OutOrStdout(), view)
+			}
+			return report.Write(cmd.OutOrStdout(), view)
 		},
 	}
 

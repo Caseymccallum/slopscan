@@ -18,7 +18,7 @@ func TestWriteShowsEvidenceNotJustScores(t *testing.T) {
 				Reasons: []string{"described in destructive terms (delete)"}},
 		},
 		Findings: map[string][]injection.Finding{
-			"delete_row": {{Where: "description", Kind: "concealment", Severity: "high", Quote: "do not tell the user"}},
+			"delete_row": {{Where: "description", Kind: "concealment", OWASP: "MCP03", Severity: "high", Quote: "do not tell the user"}},
 		},
 	})
 	if err != nil {
@@ -28,7 +28,7 @@ func TestWriteShowsEvidenceNotJustScores(t *testing.T) {
 	text := out.String()
 	for _, want := range []string{
 		"delete_row", "destructive", "described in destructive terms (delete)",
-		"concealment", "do not tell the user",
+		"MCP03", "concealment", "do not tell the user",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("report is missing %q:\n%s", want, text)

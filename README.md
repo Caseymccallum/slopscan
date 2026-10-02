@@ -38,10 +38,14 @@ slopscan scan tools.json --id my-server   # classify + scan + record, with evide
 slopscan probe -- npx -y some/mcp-server  # ask a live server what it exposes, then the same
 slopscan pin my-server                    # freeze the reviewed copy as the baseline
 slopscan drift my-server                  # what changed since the pin? exit 3 if it broke
+slopscan watch --id my-server -- npx ...  # keep asking; stop at the first change
 slopscan db list                          # every scanned server, riskiest first
 slopscan db show my-server                # one server, every verdict and quote
 slopscan names react left-padd-async      # which package names actually exist
 ```
+
+Every report-producing command takes `--format json` for pipelines - one document per report,
+the same information the prose argues from.
 
 Example verdict - every line is evidence you can argue with:
 
@@ -68,7 +72,8 @@ delete_all_records           destructive  1.00  [high]
   report additions, removals, renames, schema changes and **rewritten descriptions** - separately,
   because a rewritten description is the exact shape of a rug pull. Breaking change = exit 3, so CI
   stops. The baseline lives in the catalogue and survives re-scans: it changes only when a person
-  re-pins.
+  re-pins. `watch` completes the loop: it re-probes a live server on an interval and ends at the
+  first change - the continuous re-probing half of the rug-pull mitigation.
 - **Name checking** (`internal/registry`): looks a package name up before anything installs it. A
   name no registry has ever heard of is exactly what a slopsquat needs.
 - **The catalogue** (`internal/catalogue`): one SQLite file, pure Go, no service to run. Re-scanning
@@ -83,6 +88,16 @@ delete_all_records           destructive  1.00  [high]
   are not. The schema can escalate a verdict and the words cannot soften one.
 - **Reuse over reinvention.** Same stack as [tapelog](https://github.com/Caseymccallum/tapelog):
   Go, cobra, pure-Go SQLite.
+
+More in [`docs/DESIGN.md`](docs/DESIGN.md) - each decision with the alternative it refused.
+
+## Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Fine. A scan that found nothing, or a drift check that held. |
+| `1` | Something failed: an unreadable file, an unreachable registry, a server that would not start. |
+| `3` | The pinned baseline broke: a tool was removed, renamed, or its description or schema was rewritten. The rug-pull signal - safe to grep in CI. |
 
 ## Install
 
@@ -111,6 +126,10 @@ tool carrying injected instructions, a disguised shell, a refund tool, and a tri
   would be a different product with different promises, and it is not this one.
 - **Policy enforcement.** slopscan tells you what a server *is*; [tapelog](https://github.com/Caseymccallum/tapelog)
   is what stops it mid-call. They are deliberately two tools.
+
+The full picture of what is in and out of scope - including what a clean report cannot promise -
+is in [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md). Changes are recorded in
+[`CHANGELOG.md`](CHANGELOG.md).
 
 ## Licence
 
