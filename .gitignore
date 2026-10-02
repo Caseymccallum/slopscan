@@ -1,0 +1,7 @@
+# local catalogue and built binaries
+*.db
+*.db-wal
+*.db-shm
+*.test.exe
+/slopscan.exe
+/slopscan
