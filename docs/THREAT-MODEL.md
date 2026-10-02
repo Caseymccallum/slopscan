@@ -23,7 +23,7 @@ executes server code, and never fetches anything but a package registry's existe
 | **Unchecked write sinks** - a caller-controlled path written with no stated boundary (CVE-2026-27825 and its three 2026 siblings) | MCP02 | `unchecked-path-write` rule: write verb + path parameter + no boundary language in the contract |
 | **Hostile launch lines** - `curl | sh`, downloads piped to interpreters in `mcpServers` configs | MCP05 | `config` command's launch-execution checks |
 | **Unpinned package fetches** - `npx -y pkg` with no version: every run installs whatever the registry serves today | MCP04 | `config` command's unpinned-package check (dist-tags like `@latest` count as unpinned) |
-| **Plaintext secrets in config env** - literal credentials in `env` blocks | MCP01 | `config` command's secret-env check; values are redacted everywhere, including JSON output |
+| **Plaintext secrets in config env** - literal credentials in `env` blocks and request `headers` | MCP01 | `config` command's secret checks (`secret-env`, `secret-header`); values are redacted everywhere, including JSON output |
 | **Over-broad filesystem handover** - a server mounted on `/`, a home directory, or the docker socket | MCP02 | `config` command's broad-mount checks |
 
 ## What slopscan knowingly does not defend against
@@ -40,10 +40,11 @@ executes server code, and never fetches anything but a package registry's existe
   because the gap is real and the field is honest about it too.
 - **The model itself.** No scanner can make a model refuse a convincing instruction. Slopscan's job
   is to make the instruction visible to the *human* reviewing the tool, with the passage quoted.
-- **A remote server's tool list, from the config alone.** `config` checks what an http/sse entry
-  connects to; reading what it *exposes* needs a client session (`scan` takes a tools.json export).
-  The scoping is printed in every report - a scanner that quietly skips half the surface is worse
-  than one that admits the gap.
+- **An endpoint that refuses to answer.** Probing reaches every entry - stdio, streamable HTTP,
+  legacy HTTP+SSE, with the config's headers - but a server that demands an interactive OAuth flow
+  or another authenticator slopscan does not implement will not answer, and that is reported as an
+  error, never as an empty clean listing. What a server exposes to a client that completed a login
+  slopscan cannot perform is beyond a probe by construction.
 - **A pinned baseline nobody re-reads.** Drift detection compares scans; scheduling the re-probes
   is `watch`'s job (or a cron line calling `drift`). A pin without re-probes is a photograph of a
   door you never check again - the tool can make checking easy, but it cannot make you check.

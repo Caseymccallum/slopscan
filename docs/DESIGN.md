@@ -178,3 +178,18 @@ would be invented from the same two facts a reader can weigh themselves. Equally
 *blocking* on similarity - `lodsh` might be a real package somebody published in good faith, and
 medium-severity evidence is for a reviewer to judge. Only what is proven (a name no registry has
 ever heard of) keeps the gate.
+
+## 15. One handshake, three transports
+
+*Chosen:* the probe speaks the same three messages - initialize, the ready notification,
+tools/list - over stdio, streamable HTTP, and legacy HTTP+SSE. The remote paths honour session
+headers (`Mcp-Session-Id`, the protocol version) and carry the auth headers the client
+configuration declares; an endpoint that rejects POSTs is the signal to fall back to the older
+stream-first transport. The promise holds on every wire: one question, no tool called, and tests
+assert the exact message list against real HTTP servers.
+
+*Rejected:* leaving remote entries unprobeable - the caveat every config report printed until now
+was a gap, not a design. Equally rejected: growing the probe into a full MCP client with OAuth
+flows and tool invocation. A server that demands an interactive login refuses the listing, and
+that refusal is reported as an error - never as an empty clean list (the same honesty rule as the
+registry's "unverified").

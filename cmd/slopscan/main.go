@@ -206,28 +206,47 @@ func reportDrift(cmd *cobra.Command, format string, comparison *drift.Report) er
 // and calls no tools. Everything after the listing is the same pipeline a file scan runs.
 func probeCommand(dbPath, format *string) *cobra.Command {
 	var serverID string
+	var endpoint string
 
 	command := &cobra.Command{
-		Use:   "probe -- <server command> [args...]",
+		Use:   "probe [--url <endpoint>] -- <server command> [args...]",
 		Short: "Ask a live MCP server what tools it exposes, and record the verdict locally",
-		Long: "Starts the server, performs the MCP handshake, reads its tool list, and shuts it down. " +
+		Long: "Asks a live MCP server for its tool list - a local command is started and killed, " +
+			"a remote endpoint is contacted over streamable HTTP or legacy HTTP+SSE. " +
 			"No tool is called and nothing is written anywhere but the local catalogue. Everything " +
-			"after the listing is the same classification and injection scan a file scan runs.",
-		Args: cobra.MinimumNArgs(1),
+			"after the listing is the same classification and injection scan a file scan runs. " +
+			"Auth headers for a remote endpoint come from `config --probe`, which reads them " +
+			"from the client configuration.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			tools, err := probe.Tools(cmd.Context(), args[0], args[1:]...)
+			var tools []risk.Tool
+			var err error
+			source := ""
+			switch {
+			case endpoint != "":
+				if len(args) > 0 {
+					return fmt.Errorf("--url takes no server command; give one or the other")
+				}
+				tools, err = probe.ToolsURL(cmd.Context(), endpoint, nil)
+				source = endpoint
+			case len(args) > 0:
+				tools, err = probe.Tools(cmd.Context(), args[0], args[1:]...)
+				source = args[0]
+				if len(args) > 1 {
+					source += " (and its arguments)"
+				}
+			default:
+				return fmt.Errorf("give a server command after -- , or --url for a remote endpoint")
+			}
 			if err != nil {
 				return err
-			}
-			source := args[0]
-			if len(args) > 1 {
-				source += " (and its arguments)"
 			}
 			return analyse(cmd, *dbPath, *format, serverID, source, tools)
 		},
 	}
 
 	command.Flags().StringVar(&serverID, "id", "probed", "the server's identity in the catalogue")
+	command.Flags().StringVar(&endpoint, "url", "",
+		"probe a remote MCP endpoint (streamable HTTP or HTTP+SSE) instead of a local command")
 	return command
 }
 

@@ -8,6 +8,14 @@ not earn a version.
 
 ### Added
 
+- **Remote probing — the gap every report printed is closed.** `probe` now speaks all three MCP
+  transports: stdio, **streamable HTTP** (JSON or SSE answers, `Mcp-Session-Id` and protocol
+  headers honoured) and **legacy HTTP+SSE** (the stream names its POST endpoint). `config --probe`
+  therefore reaches remote entries too — with the `headers` the config declares (new: parsed,
+  secret-checked as `secret-header`, redacted everywhere like env values) — and the "Not evaluated:
+  the tool list" caveat is gone from remote reports. `probe --url` probes an endpoint standalone.
+  One handshake, three wires; still exactly one question and no tool ever called — proven per
+  transport by tests that assert the message list.
 - **Slopsquat checking past existence** (`registry.Near`, `registry.Freshness`): a typosquat
   exists by design - the attacker published it - so `names` and `config --check-names` now weigh
   the facts a publisher cannot rewrite: the shape of the name against a corpus of squat targets

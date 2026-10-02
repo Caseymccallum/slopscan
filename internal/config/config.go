@@ -42,6 +42,8 @@ type Entry struct {
 	Env map[string]string `json:"env,omitempty"`
 	// URL is the endpoint, for remote entries.
 	URL string `json:"url,omitempty"`
+	// Headers are the request headers a remote entry sends - where its credentials live.
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 // Finding is one risk in a config entry, quoted so it can be read - same shape as an injection
@@ -98,6 +100,7 @@ func parse(raw []byte) ([]Entry, error) {
 				Command: spec.Command,
 				Env:     stringify(spec.Env),
 				URL:     spec.URL,
+				Headers: stringify(spec.Headers),
 			}
 			for _, arg := range spec.Args {
 				entry.Args = append(entry.Args, fmt.Sprint(arg))
@@ -128,6 +131,7 @@ type entrySpec struct {
 	Args    []any          `json:"args" yaml:"args"`
 	Env     map[string]any `json:"env" yaml:"env"`
 	URL     string         `json:"url" yaml:"url"`
+	Headers map[string]any `json:"headers" yaml:"headers"`
 }
 
 func stringify(values map[string]any) map[string]string {
@@ -148,7 +152,7 @@ func Check(entry Entry) []Finding {
 	findings = append(findings, checkLaunchExecution(entry)...)
 	findings = append(findings, checkUnpinnedPackage(entry)...)
 	findings = append(findings, checkBroadMount(entry)...)
-	findings = append(findings, checkSecretEnv(entry)...)
+	findings = append(findings, checkSecrets(entry)...)
 	findings = append(findings, checkInsecureTransport(entry)...)
 	return findings
 }
@@ -163,8 +167,8 @@ func Notes(entry Entry) []string {
 		}
 	}
 	return []string{
-		"evaluated: the endpoint's transport. Not evaluated: the tool list - fetching it needs a " +
-			"client session (`scan` takes a tools.json export; `probe` speaks stdio).",
+		"evaluated: the endpoint's transport. Not evaluated here: the tool list - `--probe` " +
+			"fetches it over MCP (streamable HTTP or HTTP+SSE).",
 	}
 }
 
@@ -463,26 +467,38 @@ var secretShape = regexp.MustCompile(`(?i)^(sk-[A-Za-z0-9]|ghp_|gho_|ghu_|ghs_|g
 // placeholder is a value that names a secret instead of being one: ${VAR}, $VAR, {{input:...}}, %X%.
 var placeholder = regexp.MustCompile(`^\$\{[^}]+\}$|^\$[A-Za-z_][A-Za-z0-9_]*$|^\{\{[^}]+\}\}$|^%[^%]+%$`)
 
-func checkSecretEnv(entry Entry) []Finding {
+func checkSecrets(entry Entry) []Finding {
 	findings := []Finding{}
 	for _, key := range sortedKeys(entry.Env) {
-		value := entry.Env[key]
-		if strings.TrimSpace(value) == "" || placeholder.MatchString(value) {
-			continue
+		if finding, ok := secretFinding("env."+key, "secret-env", key, entry.Env[key]); ok {
+			findings = append(findings, finding)
 		}
-		if !secretShape.MatchString(value) && !secretName.MatchString(key) {
-			continue
+	}
+	for _, key := range sortedKeys(entry.Headers) {
+		if finding, ok := secretFinding("headers."+key, "secret-header", key, entry.Headers[key]); ok {
+			findings = append(findings, finding)
 		}
-		// The value is never quoted: a scanner that prints the secret it found has leaked it.
-		findings = append(findings, Finding{
-			Where:    "env." + key,
-			Kind:     "secret-env",
-			OWASP:    "MCP01",
-			Quote:    key + " holds a literal credential in plaintext config (value redacted)",
-			Severity: "high",
-		})
 	}
 	return findings
+}
+
+// secretFinding reports one literal credential in a config file - named, never echoed: a scanner
+// that prints the secret it found has leaked it. A placeholder names a secret instead of being
+// one, and is not a finding.
+func secretFinding(where, kind, key, value string) (Finding, bool) {
+	if strings.TrimSpace(value) == "" || placeholder.MatchString(value) {
+		return Finding{}, false
+	}
+	if !secretShape.MatchString(value) && !secretName.MatchString(key) {
+		return Finding{}, false
+	}
+	return Finding{
+		Where:    where,
+		Kind:     kind,
+		OWASP:    "MCP01",
+		Quote:    key + " holds a literal credential in plaintext config (value redacted)",
+		Severity: "high",
+	}, true
 }
 
 // localhost exempts loopback from the plain-HTTP rule: a dev server on 127.0.0.1 crosses no wire.
@@ -516,25 +532,31 @@ func sortedKeys(values map[string]string) []string {
 // Redacted returns the entry with every flagged secret value replaced - for reports that print
 // the entry itself. Findings redact their quotes; this closes the other half of the leak: a JSON
 // report that carries the secret in its entry has leaked it into whatever log receives the report.
+// Env values and headers are both covered: a credential in a header is still a credential.
 func Redacted(entry Entry) Entry {
 	out := Entry{
 		Name: entry.Name, Type: entry.Type, Command: entry.Command,
 		Args: entry.Args, URL: entry.URL,
+		Env: redactMap(entry.Env), Headers: redactMap(entry.Headers),
 	}
-	if len(entry.Env) > 0 {
-		out.Env = map[string]string{}
+	return out
+}
+
+func redactMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
 	}
-	for _, key := range sortedKeys(entry.Env) {
-		value := entry.Env[key]
-		if strings.TrimSpace(value) == "" || placeholder.MatchString(value) {
-			out.Env[key] = value
-			continue
+	out := map[string]string{}
+	for _, key := range sortedKeys(values) {
+		value := values[key]
+		switch {
+		case strings.TrimSpace(value) == "" || placeholder.MatchString(value):
+			out[key] = value
+		case secretShape.MatchString(value) || secretName.MatchString(key):
+			out[key] = "[redacted]"
+		default:
+			out[key] = value
 		}
-		if secretShape.MatchString(value) || secretName.MatchString(key) {
-			out.Env[key] = "[redacted]"
-			continue
-		}
-		out.Env[key] = value
 	}
 	return out
 }

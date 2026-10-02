@@ -364,3 +364,34 @@ func TestCheckNamesLooksPastExistence(t *testing.T) {
 		t.Errorf("an old, distinct package was flagged: %v", findings)
 	}
 }
+
+// Headers are where remote credentials live: parsed, flagged, and redacted like env values -
+// a secret in a header is still a secret in a plaintext file.
+func TestHeadersAreParsedFlaggedAndRedacted(t *testing.T) {
+	entry := loadOne(t, `{"mcpServers": {"remote": {"type": "http", "url": "https://x.example/mcp",
+		"headers": {"Authorization": "Bearer sk-live-fakevalue123", "X-Tenant": "acme"}}}}`, "remote")
+	if entry.Headers["Authorization"] == "" || entry.Headers["X-Tenant"] != "acme" {
+		t.Errorf("headers did not travel: %+v", entry.Headers)
+	}
+
+	found := false
+	for _, finding := range Check(entry) {
+		if finding.Kind == "secret-header" && finding.OWASP == "MCP01" {
+			found = true
+			if strings.Contains(finding.Quote, "fakevalue123") {
+				t.Errorf("finding quotes the credential: %+v", finding)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("credential header not flagged: %v", Check(entry))
+	}
+
+	safe := Redacted(entry)
+	if strings.Contains(safe.Headers["Authorization"], "fakevalue123") {
+		t.Errorf("redacted entry still carries the credential: %+v", safe.Headers)
+	}
+	if safe.Headers["X-Tenant"] != "acme" {
+		t.Errorf("an ordinary header was redacted: %+v", safe.Headers)
+	}
+}

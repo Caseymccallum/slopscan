@@ -38,6 +38,7 @@ slopscan scan tools.json --id my-server   # classify + scan + record, with evide
 slopscan scan tools.json --format sarif   # the same findings as alerts a platform ingests
 slopscan config claude_desktop_config.json # check the launch lines before they launch
 slopscan probe -- npx -y some/mcp-server  # ask a live server what it exposes, then the same
+slopscan probe --url https://mcp.example/mcp  # a remote endpoint: same question, three transports
 slopscan pin my-server                    # freeze the reviewed copy as the baseline
 slopscan drift my-server                  # what changed since the pin? exit 3 if it broke
 slopscan watch --id my-server -- npx ...  # keep asking; stop at the first change
@@ -85,11 +86,12 @@ delete_all_records           destructive  1.00  [high]
   never a trust score.
 - **Config scanning** (`internal/config`): `slopscan config` reads the `mcpServers`/`servers` blocks
   that Claude Desktop, Cursor, Windsurf and VS Code actually load and checks what each entry
-  launches - pipe-to-shell launch lines, unpinned package fetches, plaintext secrets in env (always
-  redacted), filesystem handovers of everything. Transport rules never fire on a local process;
-  every report says what was evaluated and what was not. `--check-names` looks up every package
-  these launch lines fetch and flags names no registry has ever heard of - the slopsquat, caught at
-  the door.
+  launches - pipe-to-shell launch lines, unpinned package fetches, plaintext secrets in env and
+  headers (always redacted), filesystem handovers of everything. Transport rules never fire on a
+  local process; every report says what was evaluated and what was not. `--check-names` looks up
+  every package these launch lines fetch and flags names no registry has ever heard of - the
+  slopsquat, caught at the door. `--probe` asks every entry for its tool list - stdio started with
+  its env, remote endpoints contacted over streamable HTTP or HTTP+SSE with their headers.
 - **The catalogue timeline** (`db history`): every scan appends an observation, so after a rug pull
   there is an answer to "when did this change?" - with the changes between observations derived
   from the stored definitions, the same `drift.Compare` the drift command uses.

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"github.com/Caseymccallum/slopscan/internal/probe"
 	"github.com/Caseymccallum/slopscan/internal/registry"
 	"github.com/Caseymccallum/slopscan/internal/report"
+	"github.com/Caseymccallum/slopscan/internal/risk"
 )
 
 // configCommand reads the client configuration the agent actually loads and reports on every
@@ -116,12 +118,12 @@ func configCommand(dbPath, format *string) *cobra.Command {
 
 			if probeThem {
 				for _, entry := range entries {
-					if entry.Type != "stdio" {
-						continue
-					}
-					tools, err := probe.ToolsIn(cmd.Context(), entry.Env, entry.Command, entry.Args...)
+					tools, err := probeEntry(cmd.Context(), entry)
 					if err != nil {
 						return fmt.Errorf("probe %s: %w", entry.Name, err)
+					}
+					if tools == nil {
+						continue // nothing to launch and no endpoint to ask
 					}
 					// One server per entry, under the name the config gives it - which is the
 					// name the agent will call it by, and the name drift should remember.
@@ -158,7 +160,8 @@ func configCommand(dbPath, format *string) *cobra.Command {
 	}
 
 	command.Flags().BoolVar(&probeThem, "probe", false,
-		"also start each stdio server, scan its tools, and compare with the pinned baseline")
+		"also ask every entry for its tool list (stdio servers started, remote endpoints contacted), "+
+			"then scan, record, and compare with the pinned baseline")
 	command.Flags().BoolVar(&checkNames, "check-names", false,
 		"look up every package the launch lines fetch, and flag names no registry knows (network)")
 	command.Flags().StringVar(&npmRegistry, "registry", "https://registry.npmjs.org",
@@ -166,6 +169,20 @@ func configCommand(dbPath, format *string) *cobra.Command {
 	command.Flags().StringVar(&pypiRegistry, "pypi-registry", "https://pypi.org/pypi",
 		"PyPI package-info endpoint for --check-names")
 	return command
+}
+
+// probeEntry asks one config entry for its tools the way the agent would launch or reach it: a
+// stdio server is started with the env the config declares, a remote endpoint is asked over its
+// transport with its headers. nil means the entry has neither a command nor a URL to ask.
+func probeEntry(ctx context.Context, entry config.Entry) ([]risk.Tool, error) {
+	switch {
+	case entry.Type == "stdio":
+		return probe.ToolsIn(ctx, entry.Env, entry.Command, entry.Args...)
+	case entry.URL != "":
+		return probe.ToolsURL(ctx, entry.URL, entry.Headers)
+	default:
+		return nil, nil
+	}
 }
 
 // writeConfigReports prints each entry's findings and scoping notes, worst entries first.

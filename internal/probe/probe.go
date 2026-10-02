@@ -1,12 +1,14 @@
 // Package probe asks a live MCP server what tools it exposes.
 //
 // The protocol side is deliberately minimal: initialise, announce, list tools, done. This is the
-// smallest honest implementation of MCP's stdio transport - newline-delimited JSON-RPC 2.0 - and
-// it exists so a scan can run against a real server instead of a saved file. Session recording,
-// policy and replay are tapelog's job; this package only asks one question and writes nothing.
+// smallest honest implementation of MCP's transports - stdio, streamable HTTP, and legacy
+// HTTP+SSE - and it exists so a scan can run against a real server instead of a saved file.
+// Session recording, policy and replay are tapelog's job; this package only asks one question
+// and writes nothing.
 //
-// The process is always started by the caller (a command and its arguments), and always killed when
-// the listing is done or the context expires: a probe should never outlive the question it asked.
+// A stdio process is always started by the caller (a command and its arguments), and always
+// killed when the listing is done or the context expires; a remote endpoint is asked over HTTP
+// and forgotten. A probe should never outlive the question it asked.
 package probe
 
 import (
@@ -88,16 +90,7 @@ func ToolsIn(ctx context.Context, env map[string]string, command string, args ..
 
 	// The handshake: initialise, then the notification that says the client is ready. Both must
 	// complete before tools/list or a strict server will refuse the question.
-	if err := writeMessage(writer, message{
-		JSONRPC: "2.0",
-		ID:      1,
-		Method:  "initialize",
-		Params: mustJSON(map[string]any{
-			"protocolVersion": protocolVersion,
-			"capabilities":    map[string]any{},
-			"clientInfo":      map[string]any{"name": "slopscan", "version": "0.1.0"},
-		}),
-	}); err != nil {
+	if err := writeMessage(writer, initializeRequest()); err != nil {
 		return nil, err
 	}
 
@@ -109,10 +102,10 @@ func ToolsIn(ctx context.Context, env map[string]string, command string, args ..
 		return nil, fmt.Errorf("initialize refused: %s", initialized.Error.Message)
 	}
 
-	if err := writeMessage(writer, message{JSONRPC: "2.0", Method: "notifications/initialized"}); err != nil {
+	if err := writeMessage(writer, initializedNotification()); err != nil {
 		return nil, err
 	}
-	if err := writeMessage(writer, message{JSONRPC: "2.0", ID: 2, Method: "tools/list"}); err != nil {
+	if err := writeMessage(writer, toolsListRequest()); err != nil {
 		return nil, err
 	}
 
@@ -124,18 +117,46 @@ func ToolsIn(ctx context.Context, env map[string]string, command string, args ..
 		if reply.ID != 2 {
 			continue // a notification or a late reply is not the answer to this question
 		}
-		if reply.Error != nil {
-			return nil, fmt.Errorf("tools/list refused: %s", reply.Error.Message)
-		}
-
-		var result struct {
-			Tools []risk.Tool `json:"tools"`
-		}
-		if err := json.Unmarshal(reply.Result, &result); err != nil {
-			return nil, fmt.Errorf("tools/list sent something unreadable: %w", err)
-		}
-		return result.Tools, nil
+		return decodeTools(reply)
 	}
+}
+
+// The handshake every transport speaks, in one place: initialize, the ready notification, and
+// the one question this package asks. A stdio line and an HTTP POST carry the same bytes.
+func initializeRequest() message {
+	return message{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "initialize",
+		Params: mustJSON(map[string]any{
+			"protocolVersion": protocolVersion,
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "slopscan", "version": "0.1.0"},
+		}),
+	}
+}
+
+func initializedNotification() message {
+	return message{JSONRPC: "2.0", Method: "notifications/initialized"}
+}
+
+func toolsListRequest() message {
+	return message{JSONRPC: "2.0", ID: 2, Method: "tools/list"}
+}
+
+// decodeTools pulls the tool list out of a tools/list reply - refused is refused, unreadable is
+// unreadable, and neither is ever reported as an empty list.
+func decodeTools(reply message) ([]risk.Tool, error) {
+	if reply.Error != nil {
+		return nil, fmt.Errorf("tools/list refused: %s", reply.Error.Message)
+	}
+	var result struct {
+		Tools []risk.Tool `json:"tools"`
+	}
+	if err := json.Unmarshal(reply.Result, &result); err != nil {
+		return nil, fmt.Errorf("tools/list sent something unreadable: %w", err)
+	}
+	return result.Tools, nil
 }
 
 func writeMessage(writer *bufio.Writer, msg message) error {
