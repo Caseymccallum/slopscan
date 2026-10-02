@@ -77,3 +77,24 @@ jobs:
             echo "want drift to exit 3 on a breaking change, got $code"
             exit 1
           fi
+      - name: SARIF output must be a document a platform can ingest
+        run: |
+          # The scan exits 3 here (the empty surface broke the baseline); this step asserts
+          # on the document it emitted before refusing.
+          ./slopscan scan empty.json --id fixture --format sarif --db dogfood.db > report.sarif || true
+          python3 - <<'EOF'
+          import json
+          doc = json.load(open("report.sarif"))
+          assert doc["version"] == "2.1.0", doc["version"]
+          run = doc["runs"][0]
+          assert run["tool"]["driver"]["name"] == "slopscan"
+          assert run["tool"]["driver"]["rules"], "no rules emitted"
+          assert run["results"], "a broken surface must produce results"
+          kinds = {r["ruleId"] for r in run["results"]}
+          assert any(k.startswith("drift/") for k in kinds), kinds
+          for result in run["results"]:
+              assert result["level"] in ("error", "warning", "note"), result
+              assert result["message"]["text"], "a result without evidence"
+              assert result["locations"], "a result without a location"
+          print("sarif ok:", len(run["results"]), "results")
+          EOF

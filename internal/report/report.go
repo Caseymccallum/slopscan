@@ -4,8 +4,8 @@
 // printed as a quote, because the output of a security tool is only useful if the reader can
 // disagree with it line by line. Colour is used sparingly and only to rank, never to inform.
 //
-// The machine-readable forms (WriteJSON, WriteDriftJSON) carry the same information as the prose -
-// a pipeline and a person are two readers of one report, not two reports.
+// The machine-readable forms (WriteJSON, WriteDriftJSON, WriteSARIF) carry the same information as
+// the prose - a pipeline and a person are two readers of one report, not two reports.
 package report
 
 import (

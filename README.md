@@ -35,6 +35,7 @@ slopscan is built around that advice, because it is the part an ordinary develop
 
 ```
 slopscan scan tools.json --id my-server   # classify + scan + record, with evidence
+slopscan scan tools.json --format sarif   # the same findings as alerts a platform ingests
 slopscan config claude_desktop_config.json # check the launch lines before they launch
 slopscan probe -- npx -y some/mcp-server  # ask a live server what it exposes, then the same
 slopscan pin my-server                    # freeze the reviewed copy as the baseline
@@ -89,6 +90,9 @@ delete_all_records           destructive  1.00  [high]
 - **The catalogue timeline** (`db history`): every scan appends an observation, so after a rug pull
   there is an answer to "when did this change?" - with the changes between observations derived
   from the stored definitions, the same `drift.Compare` the drift command uses.
+- **SARIF output** (`--format sarif`): every format a person reads has a format a platform reads -
+  findings and drift as SARIF 2.1.0 alerts, one deterministic document per run, emitted before any
+  gate refuses. The Security tab a team already watches is where these alerts belong.
 - **The tapelog bridge** (`internal/policy`): `slopscan policy <id>` writes a tapelog policy pack
   from a scan - the verdicts translated into the rules tapelog enforces mid-call, verified to load
   in tapelog's own `policy test`. Scan with slopscan, enforce with tapelog: two tools, one defence.
@@ -112,8 +116,26 @@ More in [`docs/DESIGN.md`](docs/DESIGN.md) - each decision with the alternative 
 | Code | Meaning |
 | --- | --- |
 | `0` | Fine. A scan that found nothing, or a drift check that held. |
-| `1` | Something failed: an unreadable file, an unreachable registry, a server that would not start. |
+| `1` | Something failed: an unreadable file, an unreachable registry, a server that would not start - or a config the `config` gate refuses to launch (high-severity findings). |
 | `3` | The pinned baseline broke: a tool was removed, renamed, or its description or schema was rewritten. The rug-pull signal - safe to grep in CI. |
+
+## In CI
+
+`--format sarif` turns a run into one SARIF 2.1.0 document - findings as alerts with their quotes
+as evidence, drift events as `drift/*` alerts - and a run that gates (exit 1, exit 3) still emits
+its document first, so a pipeline that stops on the exit code keeps the alerts that stopped it.
+GitHub code scanning, GitLab, and anything else that reads SARIF can ingest it directly:
+
+```yaml
+      - name: Scan the MCP configuration
+        run: slopscan config .claude/claude_desktop_config.json --format sarif > slopscan.sarif
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: slopscan.sarif
+```
+
+`if: always()` matters: the interesting runs are exactly the ones that exit non-zero.
 
 ## Install
 

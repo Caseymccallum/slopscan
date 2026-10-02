@@ -146,3 +146,19 @@ as clean: "checked nothing" is not evidence.
 *Rejected:* checking only explicitly pinned packages, or silently skipping the network step when a
 flag is absent - the flag is explicit so nothing phones home by accident (decision 1), and when it
 is asked for, every fetched name is checked, pinned or not.
+
+## 13. Alerts are for the queue the team already watches
+
+*Chosen:* `--format sarif` emits SARIF 2.1.0 - findings as results, finding kinds as OWASP-tagged
+rules, drift events as `drift/*` results - in one deterministic document per run (sorted artifact,
+subject, rule), so alert platforms deduplicating by identity see one alert, not one per run. A
+finding that gates a run (config's exit 1, drift's exit 3) still emits its document *first*: CI
+that stops on the exit code still needs to see what stopped it. `security-severity` values are
+fixed display buckets for the host's ranking scheme, never computed CVSS - evidence over scores
+holds in the standards world too.
+
+*Rejected:* SARIF as a second findings pipeline with its own rules and severities. The document is
+a projection of the same findings every other output prints - one implementation of what was
+found, several renderings of it. Equally rejected: emitting on the happy path only, which trains
+teams to trust an empty Security tab as "clean" when it really means "the gate fired and the alerts
+were thrown away".

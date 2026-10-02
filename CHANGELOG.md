@@ -8,6 +8,12 @@ not earn a version.
 
 ### Added
 
+- **`--format sarif`** (SARIF 2.1.0) on `scan`, `probe`, `watch` and `config`: findings as results,
+  finding kinds as OWASP-tagged rules, drift events as `drift/*` alerts - one deterministic
+  document per run, so GitHub code scanning and every other platform can ingest it and alert
+  platforms deduplicate correctly. A finding that gates (exit 1, exit 3) still emits its document
+  first: a refusal without its alerts is a report nobody reads. CI validates the document shape on
+  every push.
 - **`db history <id>`** - the timeline no other table can hold. A re-scan replaces the verdict, so
   after a rug pull "when did this change?" had no answer: now every scan appends an observation
   (timestamp, tool count, risk, surface fingerprint) and the report derives the changes between

@@ -11,6 +11,7 @@ import (
 	"github.com/Caseymccallum/slopscan/internal/config"
 	"github.com/Caseymccallum/slopscan/internal/probe"
 	"github.com/Caseymccallum/slopscan/internal/registry"
+	"github.com/Caseymccallum/slopscan/internal/report"
 )
 
 // configCommand reads the client configuration the agent actually loads and reports on every
@@ -34,6 +35,8 @@ func configCommand(dbPath, format *string) *cobra.Command {
 			"fail - and each report says what was evaluated and what was not.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			sarifInputs := []report.SARIFInput{}
+			breaking := false
 			raw, err := os.ReadFile(args[0])
 			if err != nil {
 				return err
@@ -60,7 +63,23 @@ func configCommand(dbPath, format *string) *cobra.Command {
 				})
 			}
 
-			if *format == "json" {
+			if *format == "sarif" {
+				// SARIF mode gathers everything into one document - config findings now,
+				// probe findings added below - because a security platform wants one upload
+				// per run, not one per entry.
+				for _, entryReport := range reports {
+					for _, finding := range entryReport.Findings {
+						sarifInputs = append(sarifInputs, report.SARIFInput{
+							RuleID:   finding.Kind,
+							Level:    finding.Severity,
+							Message:  finding.Quote,
+							Artifact: args[0],
+							Subject:  entryReport.Entry.Name,
+							OWASP:    finding.OWASP,
+						})
+					}
+				}
+			} else if *format == "json" {
 				encoded, err := json.Marshal(reports)
 				if err != nil {
 					return err
@@ -73,11 +92,17 @@ func configCommand(dbPath, format *string) *cobra.Command {
 			// The exit-code contract in the gate direction: like `names` refusing a name that
 			// does not exist, a high-severity finding means do not launch this as written.
 			high := 0
-			for _, report := range reports {
-				for _, finding := range report.Findings {
+			for _, entryReport := range reports {
+				for _, finding := range entryReport.Findings {
 					if finding.Severity == "high" {
 						high++
 					}
+				}
+			}
+			// A finding that gates still owes the pipeline its alerts: emit before refusing.
+			if high > 0 && *format == "sarif" {
+				if err := report.WriteSARIF(cmd.OutOrStdout(), version, sarifInputs); err != nil {
+					return err
 				}
 			}
 			if high > 0 {
@@ -100,9 +125,32 @@ func configCommand(dbPath, format *string) *cobra.Command {
 					}
 					// One server per entry, under the name the config gives it - which is the
 					// name the agent will call it by, and the name drift should remember.
+					if *format == "sarif" {
+						view, comparison, err := evaluate(*dbPath, entry.Name, args[0], tools)
+						if err != nil {
+							return err
+						}
+						sarifInputs = append(sarifInputs, report.SARIFInputsFromServer(args[0], view)...)
+						if comparison != nil {
+							sarifInputs = append(sarifInputs, report.SARIFInputsFromDrift(args[0], *comparison)...)
+							if comparison.Breaking {
+								breaking = true
+							}
+						}
+						continue
+					}
 					if err := analyse(cmd, *dbPath, *format, entry.Name, args[0], tools); err != nil {
 						return err
 					}
+				}
+			}
+
+			if *format == "sarif" {
+				if err := report.WriteSARIF(cmd.OutOrStdout(), version, sarifInputs); err != nil {
+					return err
+				}
+				if breaking {
+					return &BreakingError{Message: "breaking changes against the pinned baseline"}
 				}
 			}
 			return nil

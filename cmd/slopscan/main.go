@@ -144,6 +144,22 @@ func analyse(cmd *cobra.Command, dbPath, format, serverID, source string, tools 
 		return err
 	}
 
+	if format == "sarif" {
+		// One SARIF document per run, drift included: a rug pull is an alert in the same
+		// queue as the findings, not a line of prose the pipeline has to parse.
+		inputs := report.SARIFInputsFromServer(source, view)
+		if comparison != nil {
+			inputs = append(inputs, report.SARIFInputsFromDrift(source, *comparison)...)
+		}
+		if err := report.WriteSARIF(cmd.OutOrStdout(), version, inputs); err != nil {
+			return err
+		}
+		if comparison != nil && comparison.Breaking {
+			return &BreakingError{Message: "breaking changes against the pinned baseline"}
+		}
+		return nil
+	}
+
 	if format == "json" {
 		if err := report.WriteJSON(cmd.OutOrStdout(), view); err != nil {
 			return err
