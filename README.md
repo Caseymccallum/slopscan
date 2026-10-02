@@ -39,6 +39,7 @@ slopscan probe -- npx -y some/mcp-server  # ask a live server what it exposes, t
 slopscan pin my-server                    # freeze the reviewed copy as the baseline
 slopscan drift my-server                  # what changed since the pin? exit 3 if it broke
 slopscan watch --id my-server -- npx ...  # keep asking; stop at the first change
+slopscan policy my-server > pack.yaml     # a tapelog policy pack from the scan
 slopscan db list                          # every scanned server, riskiest first
 slopscan db show my-server                # one server, every verdict and quote
 slopscan names react left-padd-async      # which package names actually exist
@@ -76,6 +77,9 @@ delete_all_records           destructive  1.00  [high]
   first change - the continuous re-probing half of the rug-pull mitigation.
 - **Name checking** (`internal/registry`): looks a package name up before anything installs it. A
   name no registry has ever heard of is exactly what a slopsquat needs.
+- **The tapelog bridge** (`internal/policy`): `slopscan policy <id>` writes a tapelog policy pack
+  from a scan - the verdicts translated into the rules tapelog enforces mid-call, verified to load
+  in tapelog's own `policy test`. Scan with slopscan, enforce with tapelog: two tools, one defence.
 - **The catalogue** (`internal/catalogue`): one SQLite file, pure Go, no service to run. Re-scanning
   a server replaces its old verdict: a re-scan is a new observation of the same thing.
 

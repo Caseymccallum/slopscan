@@ -24,7 +24,10 @@ import (
 	"github.com/Caseymccallum/slopscan/internal/risk"
 )
 
-const version = "0.2.0"
+// version is the release version. The release build stamps the real one via
+// `-ldflags "-X main.version=..."` (see .goreleaser.yaml); a build from source says "dev", which
+// is the truth for a build nobody cut.
+var version = "dev"
 
 func main() {
 	root := &cobra.Command{
@@ -48,7 +51,7 @@ func main() {
 	root.AddCommand(
 		scanCommand(&dbPath, &format), probeCommand(&dbPath, &format), watchCommand(&dbPath, &format),
 		dbCommand(&dbPath, &format), pinCommand(&dbPath), driftCommand(&dbPath, &format),
-		namesCommand(), versionCommand(),
+		policyCommand(&dbPath), namesCommand(), versionCommand(),
 	)
 	if err := root.Execute(); err != nil {
 		// Exit 3 for a broken baseline contract (the signal CI greps for), 1 for everything else.

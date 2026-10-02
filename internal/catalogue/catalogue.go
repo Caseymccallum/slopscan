@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS findings (
   tool_name TEXT NOT NULL,
   where_found TEXT NOT NULL,
   kind TEXT NOT NULL,
+  owasp TEXT NOT NULL DEFAULT '',
   severity TEXT NOT NULL,
   quote TEXT NOT NULL
 );
@@ -138,8 +139,8 @@ func (c *Catalogue) Record(
 		}
 		for _, finding := range findings[assessment.Tool] {
 			if _, err := tx.Exec(
-				`INSERT INTO findings (server_id, tool_name, where_found, kind, severity, quote) VALUES (?, ?, ?, ?, ?, ?)`,
-				serverID, assessment.Tool, finding.Where, finding.Kind, finding.Severity, finding.Quote,
+				`INSERT INTO findings (server_id, tool_name, where_found, kind, owasp, severity, quote) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				serverID, assessment.Tool, finding.Where, finding.Kind, finding.OWASP, finding.Severity, finding.Quote,
 			); err != nil {
 				return err
 			}
@@ -288,7 +289,7 @@ WHERE server_id = ? ORDER BY weight DESC, name`,
 // Findings returns every injection finding recorded for one server.
 func (c *Catalogue) Findings(serverID string) (map[string][]injection.Finding, error) {
 	rows, err := c.db.Query(
-		`SELECT tool_name, where_found, kind, severity, quote FROM findings WHERE server_id = ?`,
+		`SELECT tool_name, where_found, kind, owasp, severity, quote FROM findings WHERE server_id = ?`,
 		serverID,
 	)
 	if err != nil {
@@ -300,7 +301,7 @@ func (c *Catalogue) Findings(serverID string) (map[string][]injection.Finding, e
 	for rows.Next() {
 		var toolName string
 		var finding injection.Finding
-		if err := rows.Scan(&toolName, &finding.Where, &finding.Kind, &finding.Severity, &finding.Quote); err != nil {
+		if err := rows.Scan(&toolName, &finding.Where, &finding.Kind, &finding.OWASP, &finding.Severity, &finding.Quote); err != nil {
 			return nil, err
 		}
 		findings[toolName] = append(findings[toolName], finding)

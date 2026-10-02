@@ -71,7 +71,7 @@ var rules = []rule{
 		kind:     "exfiltration",
 		severity: "high",
 		owasp:    "MCP01",
-		pattern:  regexp.MustCompile(`(?i)(send|post|upload|forward|exfiltrate|transmit)\b.{0,60}\b(token|secret|credential|password|key|env|environment)\b`),
+		pattern:  regexp.MustCompile(`(?i)(send|post|upload|forward|exfiltrate|transmit)\b.{0,60}\b(tokens?|secrets?|credentials?|passwords?|keys?|env|environment)\b`),
 	},
 	{
 		// The Deadbugz payload, in the campaign's own shape: not "send us the secrets" but
@@ -80,19 +80,21 @@ var rules = []rule{
 		kind:     "credential-harvest",
 		severity: "high",
 		owasp:    "MCP01",
-		pattern: regexp.MustCompile(`(?i)(search|look|scan|check|read|collect|gather|harvest|grab|enumerate)\b.{0,50}\b` +
+		pattern: regexp.MustCompile(`(?i)\b(search|look|scan|check|read|collect|gather|harvest|grab|enumerate)\w*\b.{0,50}\b` +
 			`(ssh\s*keys?|\.ssh|id_rsa|id_ed25519|cloud\s*credentials?|shell\s*history|\.bash_history|\.zsh_history|` +
 			`aws\s*credentials|\.aws\b|\.env\b|private\s*keys?|wallet|keystore|browser\s*(passwords?|cookies?))`),
 	},
 	{
 		// The Deadbugz trigger: behaviour gated on how many times a tool has been called. No
 		// legitimate tool description counts the caller's calls. The clause after the count is the
-		// payload verb ("start including", "search for", "then send"), so the rule waits for both.
+		// payload verb ("start including", "search for", "then send"), so the rule waits for both -
+		// and the verb needs a word boundary before it, or "already" reads as "read".
 		kind:     "runtime-gating",
 		severity: "high",
 		owasp:    "MCP03",
-		pattern: regexp.MustCompile(`(?i)(after|on|once|following)\s+(the\s+)?(first|second|third|fourth|fifth|\d+|several|multiple|repeated)?\s*` +
-			`(call|invocation|use|run|request)s?\b.{0,60}(then|start|begin|switch|activate|enable|change|search|look|include|send|forward|read|check|gather|collect)`),
+		pattern: regexp.MustCompile(`(?i)\b(after|on|once|following)\s+(?:the\s+|a\s+|your\s+)?` +
+			`(?:first|second|third|fourth|fifth|\d+|several|multiple|repeated|few|initial|subsequent)?\s*` +
+			`(call|invocation|use|run|request)s?\b.{0,60}\b(then|start|begin|switch|activate|enable|change|search|look|include|send|forward|read|check|gather|collect)`),
 	},
 	{
 		// Tool shadowing: a description claiming authority over another tool ("this replaces X",

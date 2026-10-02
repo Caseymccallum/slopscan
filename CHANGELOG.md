@@ -4,6 +4,28 @@ All notable changes to slopscan. The format follows [Keep a Changelog](https://k
 and the versions move when behaviour a script could depend on changes - output wording alone does
 not earn a version.
 
+## [Unreleased]
+
+### Added
+
+- **`slopscan policy <id>`**: writes a tapelog policy pack from a scan - hostile metadata denied,
+  destructive/financial/execute confirmed, clean reads allowed, unlisted tools confirmed by
+  default. The generated pack is accepted by tapelog's own `policy test` (verified against it):
+  scan with slopscan, enforce with tapelog. Generated policy is a starting point to edit and test,
+  and says so in its header.
+- **`testdata/corpus/`**: the rules' standing reputation - documented attack shapes (the Deadbugz
+  campaign, the postmark-mcp incident, tool shadowing, hidden instructions) with the findings they
+  must produce, and clean guards that must produce none. The corpus caught real bugs on its first
+  day: plurals ("tokens" not "token") escaping the exfiltration rule, and a missing word boundary
+  in the runtime-gating rule. New rules and reported misses land here.
+- **CI (`.github/workflows/ci.yml`)**: build, vet, race tests, govulncheck on Linux and Windows -
+  plus a dogfood job that runs the built binary against the repo's own fixture and asserts the
+  exit-code contract (clean re-scan exits 0, a removed tool exits 3).
+- **Release engineering (`.goreleaser.yaml`, `.github/workflows/release.yml`)**: signed GitHub
+  Releases on `v*` tags - 6 static binaries, cosign-signed checksums, one SBOM per archive, build
+  provenance attestation. The release stamps the version via ldflags; a source build says "dev".
+- `LICENSE` (MIT, as the README always claimed).
+
 ## [0.2.0] - 2026-10-01
 
 ### Added

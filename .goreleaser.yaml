@@ -1,0 +1,50 @@
+# goreleaser config - single static binaries for the platforms agents run on.
+# Release flow: push a v* tag (or workflow_dispatch the release workflow)
+# and it builds, SBOMs (syft), signs (cosign), attests provenance, and
+# publishes the GitHub Release. Same model as tapelog's.
+version: 2
+
+project_name: slopscan
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: slopscan
+    main: ./cmd/slopscan
+    binary: slopscan
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+# One SBOM per archive (syft) - what is in the binary is checkable, not claimed.
+sboms:
+  - artifacts: archive
+
+# Sign the checksums file with cosign (keyless via the workflow's OIDC
+# identity); one signature covers every artifact hash.
+signs:
+  - cmd: cosign
+    signature: "${artifact}.sig"
+    certificate: "${artifact}.pem"
+    args: ["sign-blob", "--output-signature=${signature}", "--output-certificate=${certificate}", "${artifact}", "--yes"]
+    artifacts: checksum
+
+changelog:
+  sort: asc
+  filters:
+    exclude: ["^docs:", "^test:", "^chore:"]

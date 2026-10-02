@@ -30,7 +30,7 @@ func TestRecordAndReadBack(t *testing.T) {
 		{Tool: "read_row", Category: risk.Read, Weight: 0.0, Confidence: "high", Reasons: []string{"described in read terms (read)"}},
 	}
 	findings := map[string][]injection.Finding{
-		"delete_row": {{Where: "description", Kind: "instruction-override", Severity: "high", Quote: "ignore all previous instructions"}},
+		"delete_row": {{Where: "description", Kind: "instruction-override", OWASP: "MCP03", Severity: "high", Quote: "ignore all previous instructions"}},
 	}
 
 	if err := cat.Record("srv", "test", tools, assessments, findings); err != nil {
@@ -70,13 +70,17 @@ func TestRecordAndReadBack(t *testing.T) {
 		t.Errorf("got %+v, want 2 definitions with their descriptions", definitions)
 	}
 
-	// The finding travels with the tool it was found on, quote and all.
+	// The finding travels with the tool it was found on, quote and all - including its OWASP
+	// code, which once got dropped by the round-trip and left every policy reason ending in "/".
 	back, err := cat.Findings("srv")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if back["delete_row"][0].Quote != "ignore all previous instructions" {
 		t.Errorf("finding lost its quote: %+v", back)
+	}
+	if back["delete_row"][0].OWASP != "MCP03" {
+		t.Errorf("finding lost its OWASP code: %+v", back["delete_row"][0])
 	}
 }
 

@@ -4,4 +4,4 @@
 *.db-shm
 *.test.exe
 /slopscan.exe
-/slopscan
+/slopscanempty.json
