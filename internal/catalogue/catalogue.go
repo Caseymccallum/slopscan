@@ -77,7 +77,24 @@ CREATE TABLE IF NOT EXISTS findings (
   severity TEXT NOT NULL,
   quote TEXT NOT NULL
 );
+-- History is append-only and, like the baseline, deliberately has no foreign key to servers: a
+-- re-scan replaces the servers row (that is how a new observation supersedes an old one), and the
+-- record of what was seen when must survive it. A re-scan is a new row here even though it is a
+-- replacement up there - the timeline is the half of the story that only grows.
+CREATE TABLE IF NOT EXISTS history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id TEXT NOT NULL,
+  scanned_at TEXT NOT NULL,
+  tool_count INTEGER NOT NULL,
+  risk REAL NOT NULL,
+  surface TEXT NOT NULL,
+  -- The tool definitions are stored when the surface differs from the row before and left empty
+  -- when it does not: an unchanged observation is carried by the last row that changed. A watch
+  -- loop must not grow the file by a copy of the tool list every tick.
+  tools_json TEXT NOT NULL DEFAULT ''
+);
 CREATE INDEX IF NOT EXISTS findings_by_server ON findings(server_id);
+CREATE INDEX IF NOT EXISTS history_by_server ON history(server_id);
 CREATE INDEX IF NOT EXISTS tools_by_weight ON tools(weight);
 `
 	if _, err := db.Exec(schema); err != nil {
@@ -145,6 +162,28 @@ func (c *Catalogue) Record(
 				return err
 			}
 		}
+	}
+
+	// The timeline grows even though the verdict is replaced: one row per scan, so "when did this
+	// change?" has an answer. Definitions are stored only when the surface differs from the row
+	// before - unchanged scans are the common case and a watch loop is a copy machine otherwise.
+	totalWeight := 0.0
+	for _, assessment := range assessments {
+		totalWeight += assessment.Weight
+	}
+	surface := risk.SurfaceFingerprint(tools)
+	previous := ""
+	_ = tx.QueryRow(`SELECT surface FROM history WHERE server_id = ? ORDER BY id DESC LIMIT 1`, serverID).Scan(&previous)
+	stored := ""
+	if surface != previous {
+		raw, _ := json.Marshal(tools)
+		stored = string(raw)
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO history (server_id, scanned_at, tool_count, risk, surface, tools_json) VALUES (?, ?, ?, ?, ?, ?)`,
+		serverID, time.Now().UTC().Format(time.RFC3339), len(tools), totalWeight, surface, stored,
+	); err != nil {
+		return err
 	}
 
 	return tx.Commit()
@@ -307,4 +346,50 @@ func (c *Catalogue) Findings(serverID string) (map[string][]injection.Finding, e
 		findings[toolName] = append(findings[toolName], finding)
 	}
 	return findings, rows.Err()
+}
+
+// Observation is one scan as the timeline remembers it.
+type Observation struct {
+	ID        int64     `json:"id"`
+	ScannedAt time.Time `json:"scannedAt"`
+	Tools     int       `json:"tools"`
+	Risk      float64   `json:"risk"`
+	Surface   string    `json:"surface"`
+	// Definitions is the tool list as of this scan. Unchanged observations store no copy of
+	// their own (see the schema); they carry the definitions forward from the last row that did.
+	Definitions []risk.Tool `json:"definitions"`
+}
+
+// History returns every observation of one server, oldest first: the timeline that answers "when
+// did this change?" - the question the verdict table cannot, because a re-scan replaces it.
+func (c *Catalogue) History(serverID string) ([]Observation, error) {
+	rows, err := c.db.Query(
+		`SELECT id, scanned_at, tool_count, risk, surface, tools_json FROM history
+ WHERE server_id = ? ORDER BY id`, serverID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	observations := []Observation{}
+	carried := []risk.Tool{}
+	for rows.Next() {
+		var observation Observation
+		var scannedAt, stored string
+		if err := rows.Scan(&observation.ID, &scannedAt, &observation.Tools, &observation.Risk,
+			&observation.Surface, &stored); err != nil {
+			return nil, err
+		}
+		observation.ScannedAt, _ = time.Parse(time.RFC3339, scannedAt)
+		if stored != "" {
+			carried = nil
+			if err := json.Unmarshal([]byte(stored), &carried); err != nil {
+				return nil, err
+			}
+		}
+		observation.Definitions = carried
+		observations = append(observations, observation)
+	}
+	return observations, rows.Err()
 }

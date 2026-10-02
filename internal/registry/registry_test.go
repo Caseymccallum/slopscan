@@ -61,3 +61,24 @@ func TestCheckAllSurvivesFailures(t *testing.T) {
 		t.Error("good lookup was not reported")
 	}
 }
+
+// PyPI answers at /pypi/<name>/json: a suffix is part of the registry's address, not a
+// transformation of the name (which this package refuses to guess at).
+func TestSuffixIsAppendedToTheLookupURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/requests/json" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"info":{"name":"requests"}}`))
+	}))
+	defer server.Close()
+
+	result, err := (Checker{Base: server.URL, Suffix: "/json"}).Exists("requests")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Exists {
+		t.Error("suffixed lookup did not find the package")
+	}
+}

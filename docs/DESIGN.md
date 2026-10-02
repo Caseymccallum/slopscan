@@ -119,3 +119,30 @@ it.
 *Rejected:* flagging every tool with a path parameter. Read tools are quiet (the verb half must
 hold), and bounded write tools are quiet - the corpus's clean guards enforce both directions,
 because a scanner that flags everything is as useless as one that flags nothing.
+
+## 11. The timeline is append-only, and the verdict is not
+
+*Chosen:* every scan writes one history row - timestamp, tool count, risk, surface fingerprint -
+even though the same scan replaces the verdict row above it. The definitions are stored only when
+the surface differs from the previous observation (a watch loop must not grow the file by a copy
+of the tool list every tick) and carried forward when it does not. Change lists are *derived at
+read time* by comparing consecutive observations with the same `drift.Compare` the drift command
+uses - one implementation of "what changed", so the timeline and the drift report cannot disagree.
+
+*Rejected:* storing a change-events table alongside. An events table is a second source of truth
+that can be half-written, orphaned or out of order; the timeline of raw observations is complete
+by construction and cannot drift from itself. Rejected equally: a foreign key from history to
+servers, which would let a re-scan delete the record of what the re-scan replaced - the past must
+survive the present.
+
+## 12. A config is a gate, and the supply chain is checked at the door
+
+*Chosen:* `config --check-names` looks up every package a launch line fetches before anything
+installs it - the `names` check aimed at the moment it matters. Versions are stripped to the
+registry name exactly as written (this package never "fixes" a name); a name no registry knows is
+the slopsquat and is flagged high. A registry that cannot answer is reported as *unverified*, never
+as clean: "checked nothing" is not evidence.
+
+*Rejected:* checking only explicitly pinned packages, or silently skipping the network step when a
+flag is absent - the flag is explicit so nothing phones home by accident (decision 1), and when it
+is asked for, every fetched name is checked, pinned or not.

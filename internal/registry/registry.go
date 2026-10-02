@@ -27,6 +27,9 @@ type Result struct {
 type Checker struct {
 	// Base is the registry's package-info endpoint, e.g. https://registry.npmjs.org.
 	Base string
+	// Suffix is appended after the name in the lookup URL, for registries whose API wants one
+	// (PyPI answers at /pypi/<name>/json). npm wants none.
+	Suffix string
 	// Client is the HTTP client to use; nil means a client with a 10s timeout.
 	Client *http.Client
 }
@@ -41,7 +44,7 @@ func (c Checker) Exists(name string) (Result, error) {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
 
-	target := strings.TrimRight(c.Base, "/") + "/" + url.PathEscape(name)
+	target := strings.TrimRight(c.Base, "/") + "/" + url.PathEscape(name) + c.Suffix
 	response, err := client.Get(target)
 	if err != nil {
 		return Result{Name: name, Error: err.Error()}, err

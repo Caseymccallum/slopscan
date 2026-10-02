@@ -41,6 +41,7 @@ slopscan pin my-server                    # freeze the reviewed copy as the base
 slopscan drift my-server                  # what changed since the pin? exit 3 if it broke
 slopscan watch --id my-server -- npx ...  # keep asking; stop at the first change
 slopscan policy my-server > pack.yaml     # a tapelog policy pack from the scan
+slopscan db history my-server             # when the surface changed, and how
 slopscan db list                          # every scanned server, riskiest first
 slopscan db show my-server                # one server, every verdict and quote
 slopscan names react left-padd-async      # which package names actually exist
@@ -82,7 +83,12 @@ delete_all_records           destructive  1.00  [high]
   that Claude Desktop, Cursor, Windsurf and VS Code actually load and checks what each entry
   launches - pipe-to-shell launch lines, unpinned package fetches, plaintext secrets in env (always
   redacted), filesystem handovers of everything. Transport rules never fire on a local process;
-  every report says what was evaluated and what was not.
+  every report says what was evaluated and what was not. `--check-names` looks up every package
+  these launch lines fetch and flags names no registry has ever heard of - the slopsquat, caught at
+  the door.
+- **The catalogue timeline** (`db history`): every scan appends an observation, so after a rug pull
+  there is an answer to "when did this change?" - with the changes between observations derived
+  from the stored definitions, the same `drift.Compare` the drift command uses.
 - **The tapelog bridge** (`internal/policy`): `slopscan policy <id>` writes a tapelog policy pack
   from a scan - the verdicts translated into the rules tapelog enforces mid-call, verified to load
   in tapelog's own `policy test`. Scan with slopscan, enforce with tapelog: two tools, one defence.

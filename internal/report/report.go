@@ -14,7 +14,9 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/Caseymccallum/slopscan/internal/catalogue"
 	"github.com/Caseymccallum/slopscan/internal/drift"
 	"github.com/Caseymccallum/slopscan/internal/injection"
 	"github.com/Caseymccallum/slopscan/internal/risk"
@@ -143,6 +145,127 @@ func truncate(value string, max int) string {
 		return value
 	}
 	return strings.TrimSpace(value[:max-1]) + "…"
+}
+
+// HistoryView is one observation on a timeline, with what changed since the one before it.
+type HistoryView struct {
+	ScannedAt time.Time `json:"scannedAt"`
+	Tools     int       `json:"tools"`
+	Risk      float64   `json:"risk"`
+	Surface   string    `json:"surface"`
+	// Changes is the drift against the previous observation; empty for the first. Derived at
+	// render time from the stored definitions, so the timeline cannot disagree with itself.
+	Changes []drift.Change `json:"changes"`
+}
+
+// HistoryReport is one server's whole timeline, ready to print or send.
+type HistoryReport struct {
+	ID string `json:"id"`
+	// Summary is the verdict at the end of the timeline: what the current scan says.
+	Summary     string        `json:"summary"`
+	Observations []HistoryView `json:"observations"`
+}
+
+// BuildHistory turns stored observations into a report view, comparing each with the one before.
+func BuildHistory(id string, observations []catalogue.Observation) HistoryReport {
+	report := HistoryReport{ID: id, Observations: []HistoryView{}}
+	for index, observation := range observations {
+		view := HistoryView{
+			ScannedAt: observation.ScannedAt,
+			Tools:     observation.Tools,
+			Risk:      observation.Risk,
+			Surface:   observation.Surface,
+			Changes:   []drift.Change{},
+		}
+		if index > 0 {
+			comparison := drift.Compare(observations[index-1].Definitions, observation.Definitions)
+			view.Changes = comparison.Changes
+		}
+		report.Observations = append(report.Observations, view)
+	}
+	if len(observations) > 0 {
+		report.Summary = HistorySummary(observations[len(observations)-1])
+	}
+	return report
+}
+
+// HistorySummary is the one-word reading of an observation, the same vocabulary the fleet view
+// uses - so a timeline entry and a `db list` line say the same thing about the same moment.
+func HistorySummary(observation catalogue.Observation) string {
+	destructive := false
+	weight := 0.0
+	for _, tool := range observation.Definitions {
+		if risk.Classify(tool).Category == risk.Destructive {
+			destructive = true
+		}
+		weight += risk.Classify(tool).Weight
+	}
+	if destructive {
+		return "destroys data"
+	}
+	if weight > 0 {
+		return fmt.Sprintf("risk %.1f", weight)
+	}
+	return "reads only"
+}
+
+// WriteHistory prints the timeline: one line per observation, with the changes between them
+// indented underneath - the answer to "when did this change?", in the order it happened.
+func WriteHistory(w io.Writer, report HistoryReport) error {
+	if len(report.Observations) == 0 {
+		_, err := fmt.Fprintf(w, "%s: no observations recorded.\n", report.ID)
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "%s  (%d observations)\n\n", report.ID, len(report.Observations)); err != nil {
+		return err
+	}
+	for index, observation := range report.Observations {
+		note := "first observation"
+		if index > 0 {
+			if len(observation.Changes) == 0 {
+				note = "unchanged"
+			} else {
+				note = "CHANGED"
+			}
+		}
+		if _, err := fmt.Fprintf(w, "  %s  %3d tools  risk %5.1f  surface %s  %s\n",
+			observation.ScannedAt.Format(time.RFC3339), observation.Tools, observation.Risk,
+			shortHash(observation.Surface), note); err != nil {
+			return err
+		}
+		for _, change := range observation.Changes {
+			marker := "+"
+			if change.Breaking {
+				marker = "!"
+			}
+			if _, err := fmt.Fprintf(w, "      %s %-28s %-20s %s\n",
+				marker, change.Tool, change.Kind, change.Detail); err != nil {
+				return err
+			}
+		}
+	}
+	_, err := fmt.Fprintf(w, "\nNow: %s.\n", report.Summary)
+	return err
+}
+
+// shortHash trims a fingerprint to a readable identity: enough to tell two surfaces apart at a
+// glance, not enough to be noise.
+func shortHash(surface string) string {
+	if len(surface) <= 12 {
+		return surface
+	}
+	return surface[:12]
+}
+
+// WriteHistoryJSON emits the same timeline as one JSON document - for CI, for a dashboard, for
+// whatever reads reports instead of people.
+func WriteHistoryJSON(w io.Writer, report HistoryReport) error {
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(append(encoded, '\n'))
+	return err
 }
 
 // WriteDrift prints a drift comparison: what changed against the pinned baseline, and what it

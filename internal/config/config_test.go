@@ -1,8 +1,12 @@
 package config
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/Caseymccallum/slopscan/internal/registry"
 )
 
 // The configs real agents load: the mcpServers shape of Claude Desktop/Cursor/Windsurf and the
@@ -233,4 +237,88 @@ func hasKind(findings []Finding, kind string) bool {
 		}
 	}
 	return false
+}
+
+// What a launch line fetches is what a slopsquat targets: the name alone, versions stripped.
+func TestPackagesAreExtractedFromTheLaunchLine(t *testing.T) {
+	entry := Entry{Type: "stdio", Command: "npx", Args: []string{"-y", "@modelcontextprotocol/server-filesystem@0.6.2"}}
+	packages := Packages(entry)
+	if len(packages) != 1 {
+		t.Fatalf("got %d packages, want 1: %+v", len(packages), packages)
+	}
+	if packages[0].Name != "@modelcontextprotocol/server-filesystem" {
+		t.Errorf("name not stripped to the registry name: %+v", packages[0])
+	}
+	if packages[0].Ecosystem != "npm" {
+		t.Errorf("wrong ecosystem: %+v", packages[0])
+	}
+
+	py := Packages(Entry{Type: "stdio", Command: "uvx", Args: []string{"mcp-weather==1.0.0"}})
+	if len(py) != 1 || py[0].Name != "mcp-weather" || py[0].Ecosystem != "pypi" {
+		t.Errorf("uvx package wrong: %+v", py)
+	}
+
+	// A bare binary is not a package: node srv.js fetches nothing.
+	if got := Packages(Entry{Type: "stdio", Command: "node", Args: []string{"srv.js"}}); len(got) != 0 {
+		t.Errorf("a plain binary listed packages: %+v", got)
+	}
+}
+
+func TestUnversionStripsOnlyTheVersion(t *testing.T) {
+	for spec, want := range map[string]string{
+		"@scope/pkg@1.2.3":  "@scope/pkg",
+		"@scope/pkg":        "@scope/pkg",
+		"pkg@latest":        "pkg",
+		"pkg":               "pkg",
+		"pkg==1.0.0":        "pkg",
+		"pkg[extra]>=2":     "pkg",
+	} {
+		if got := unversion(spec); got != want {
+			t.Errorf("unversion(%q) = %q, want %q", spec, got, want)
+		}
+	}
+}
+
+// The check at the moment it matters: what this config is about to install.
+func TestCheckNamesFlagsWhatNoRegistryKnows(t *testing.T) {
+	known := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/real-package" {
+			_, _ = w.Write([]byte(`{"name":"real-package","versions":{}}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer known.Close()
+	checker := registry.Checker{Base: known.URL}
+
+	entry := Entry{Type: "stdio", Command: "npx", Args: []string{"-y", "real-package"}}
+	if findings := CheckNames(entry, checker, checker); len(findings) != 0 {
+		t.Errorf("a published package was flagged: %v", findings)
+	}
+
+	squat := Entry{Type: "stdio", Command: "npx", Args: []string{"-y", "left-padd-async"}}
+	found := false
+	for _, finding := range CheckNames(squat, checker, checker) {
+		if finding.Kind == "unknown-package" && finding.OWASP == "MCP04" && finding.Severity == "high" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("slopsquat name not flagged: %v", CheckNames(squat, checker, checker))
+	}
+}
+
+// A registry that cannot answer is reported as unverified, never as clean.
+func TestCheckNamesSaysUnverifiedNotClean(t *testing.T) {
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer dead.Close()
+	checker := registry.Checker{Base: dead.URL}
+
+	entry := Entry{Type: "stdio", Command: "npx", Args: []string{"-y", "anything"}}
+	findings := CheckNames(entry, checker, checker)
+	if len(findings) != 1 || findings[0].Kind != "package-unverified" {
+		t.Errorf("an unanswerable registry was not reported: %v", findings)
+	}
 }

@@ -8,6 +8,21 @@ not earn a version.
 
 ### Added
 
+- **`db history <id>`** - the timeline no other table can hold. A re-scan replaces the verdict, so
+  after a rug pull "when did this change?" had no answer: now every scan appends an observation
+  (timestamp, tool count, risk, surface fingerprint) and the report derives the changes between
+  consecutive observations from the stored definitions - so the timeline and the drift command can
+  never disagree. Unchanged scans store no copy of the tool list, so a watch loop does not grow the
+  file. History is append-only and survives server replacement - the same no-cascade property the
+  pinned baseline guards.
+- **`slopscan config --check-names`**: the slopsquat check at the moment it matters - not "does
+  this package exist in general" but "does what *this config is about to install* exist". Every
+  package a launch line fetches (npx, bunx, uvx, pipx; versions stripped to the registry name) is
+  looked up before anything installs it; a name no registry has ever heard of is flagged high
+  (MCP04) with its remediation in the quote. A registry that cannot answer is reported as
+  *unverified*, never as clean. Per-ecosystem endpoints (`--registry`, `--pypi-registry`).
+- **`SECURITY.md`**: the reporting route, completing the supply-chain story the signed releases
+  already deliver.
 - **`slopscan config <mcp-config.json>`**: reads the `mcpServers`/`servers` blocks that Claude
   Desktop, Cursor, Windsurf and VS Code actually load - the format everyone uses and most scanners
   misparse into a wall of NO_AUTH noise. Checks what each entry launches: `curl | sh` and friends

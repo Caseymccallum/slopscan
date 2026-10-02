@@ -455,8 +455,39 @@ func dbCommand(dbPath, format *string) *cobra.Command {
 		},
 	}
 
-	db.AddCommand(list, show)
+	db.AddCommand(list, show, historyCommand(dbPath, format))
 	return db
+}
+
+// historyCommand prints one server's timeline: every observation, and what changed between them.
+//
+// This is the question the verdict table cannot answer, because a re-scan replaces it: after a
+// rug pull, what a person needs is the moment the story changed and what it said before. The
+// changes are derived from the stored definitions at read time, so the timeline and the drift
+// command can never disagree about what happened.
+func historyCommand(dbPath, format *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "history <id>",
+		Short: "One server's scan timeline: when its surface changed, and how",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cat, err := catalogue.Open(*dbPath)
+			if err != nil {
+				return err
+			}
+			defer cat.Close()
+
+			observations, err := cat.History(args[0])
+			if err != nil {
+				return err
+			}
+			view := report.BuildHistory(args[0], observations)
+			if *format == "json" {
+				return report.WriteHistoryJSON(cmd.OutOrStdout(), view)
+			}
+			return report.WriteHistory(cmd.OutOrStdout(), view)
+		},
+	}
 }
 
 // namesCommand checks package names against a registry before anything installs them.

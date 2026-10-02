@@ -24,6 +24,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/Caseymccallum/slopscan/internal/registry"
 )
 
 // Entry is one server as the client configuration declares it: what will be launched, and with what.
@@ -217,27 +219,9 @@ var movingTags = map[string]bool{
 }
 
 func checkUnpinnedPackage(entry Entry) []Finding {
-	if entry.Type != "stdio" {
-		return nil
-	}
 	findings := []Finding{}
-	tokens := append([]string{entry.Command}, entry.Args...)
-	for index, token := range tokens {
-		base := strings.ToLower(token)
-		if !runners[base] {
-			continue
-		}
-		spec := nextPackage(tokens[index+1:])
-		if base == "pipx" || base == "pipx.exe" {
-			if spec == "run" { // `pipx run pkg` - the spec follows the subcommand
-				spec = nextPackage(tokens[index+2:])
-			}
-		}
-		if spec == "" || strings.HasPrefix(spec, ".") || strings.HasPrefix(spec, "/") ||
-			strings.HasPrefix(spec, `\`) {
-			continue // a local path, not a registry fetch
-		}
-		if pinned(base, spec) {
+	for _, pkg := range Packages(entry) {
+		if pinned(pkg.Runner, pkg.Spec) {
 			continue
 		}
 		findings = append(findings, Finding{
@@ -245,8 +229,114 @@ func checkUnpinnedPackage(entry Entry) []Finding {
 			Kind:     "unpinned-package",
 			OWASP:    "MCP04",
 			Quote: fmt.Sprintf("%s fetches and runs %q with no version pin - every run "+
-				"installs whatever the registry serves under that name today", base, spec),
+				"installs whatever the registry serves under that name today", pkg.Runner, pkg.Spec),
 			Severity: "medium",
+		})
+	}
+	return findings
+}
+
+// Package is one registry package a launch line fetches and runs at start - the supply chain of
+// a stdio server, one name at a time.
+type Package struct {
+	// Runner is the fetcher: npx, bunx, uvx, pipx.
+	Runner string
+	// Ecosystem is the registry family it fetches from: npm or pypi.
+	Ecosystem string
+	// Spec is the package as written in the args, version and all.
+	Spec string
+	// Name is the registry name alone: what a lookup should ask for.
+	Name string
+}
+
+// Packages lists every registry package a launch line fetches. Local paths and bare binaries are
+// not packages and are not listed - this is what the config *installs* when it starts.
+func Packages(entry Entry) []Package {
+	if entry.Type != "stdio" {
+		return nil
+	}
+	packages := []Package{}
+	tokens := append([]string{entry.Command}, entry.Args...)
+	for index, token := range tokens {
+		base := strings.ToLower(token)
+		if !runners[base] {
+			continue
+		}
+		rest := tokens[index+1:]
+		if (base == "pipx" || base == "pipx.exe") && len(rest) > 0 && rest[0] == "run" {
+			rest = rest[1:] // `pipx run pkg` - the spec follows the subcommand
+		}
+		spec := nextPackage(rest)
+		if spec == "" || strings.HasPrefix(spec, ".") || strings.HasPrefix(spec, "/") ||
+			strings.HasPrefix(spec, `\`) {
+			continue // a local path, not a registry fetch
+		}
+		ecosystem := "npm"
+		if base == "uvx" || base == "uvx.exe" || base == "pipx" || base == "pipx.exe" {
+			ecosystem = "pypi"
+		}
+		packages = append(packages, Package{
+			Runner: base, Ecosystem: ecosystem, Spec: spec, Name: unversion(spec),
+		})
+	}
+	return packages
+}
+
+// unversion strips the version constraint from a package spec, leaving the registry name exactly
+// as written - `@scope/pkg@1.2.3` becomes `@scope/pkg`, `pkg==1.0` becomes `pkg`. Scoped npm names
+// start with @, so the version is only ever the @ after the name, never the first one.
+func unversion(spec string) string {
+	if cut := strings.IndexAny(spec, "=<>!~["); cut >= 0 {
+		return spec[:cut]
+	}
+	if at := strings.LastIndex(spec, "@"); at > 0 {
+		return spec[:at]
+	}
+	return spec
+}
+
+// CheckNames looks up every package a launch line fetches and flags the ones no registry has ever
+// heard of - the slopsquat: publish under a name nothing uses, wait for a config like this one to
+// fetch it. This is the `names` check aimed at the moment it matters most: not "does this package
+// exist in general" but "does what *this machine is about to install* exist".
+//
+// Lookups are per ecosystem (npm and PyPI answer differently); a lookup that could not complete is
+// reported as such, never guessed at - a flaky registry is not evidence of malice.
+func CheckNames(entry Entry, npm, pypi registry.Checker) []Finding {
+	findings := []Finding{}
+	checked := map[string]bool{}
+	for _, pkg := range Packages(entry) {
+		if checked[pkg.Name] {
+			continue
+		}
+		checked[pkg.Name] = true
+
+		checker := npm
+		if pkg.Ecosystem == "pypi" {
+			checker = pypi
+		}
+		result, err := checker.Exists(pkg.Name)
+		if err != nil {
+			findings = append(findings, Finding{
+				Where:    "args",
+				Kind:     "package-unverified",
+				OWASP:    "MCP04",
+				Quote:    fmt.Sprintf("could not verify %q exists (%s) - checked nothing is not the same as clean", pkg.Name, result.Error),
+				Severity: "medium",
+			})
+			continue
+		}
+		if result.Exists {
+			continue
+		}
+		findings = append(findings, Finding{
+			Where:    "args",
+			Kind:     "unknown-package",
+			OWASP:    "MCP04",
+			Quote: fmt.Sprintf("%q is fetched at launch and no %s registry has ever heard of it - "+
+				"exactly the shape of a slopsquat; publishing under that name is trivial once "+
+				"something asks for it", pkg.Name, pkg.Ecosystem),
+			Severity: "high",
 		})
 	}
 	return findings

@@ -10,6 +10,7 @@ import (
 
 	"github.com/Caseymccallum/slopscan/internal/config"
 	"github.com/Caseymccallum/slopscan/internal/probe"
+	"github.com/Caseymccallum/slopscan/internal/registry"
 )
 
 // configCommand reads the client configuration the agent actually loads and reports on every
@@ -20,6 +21,8 @@ import (
 // scanning, catalogue, drift. The config file is the deployment; this makes the scan match it.
 func configCommand(dbPath, format *string) *cobra.Command {
 	var probeThem bool
+	var checkNames bool
+	var npmRegistry, pypiRegistry string
 
 	command := &cobra.Command{
 		Use:   "config <mcp-config.json>",
@@ -41,10 +44,18 @@ func configCommand(dbPath, format *string) *cobra.Command {
 			}
 
 			reports := make([]config.EntryReport, 0, len(entries))
+			npm := registry.Checker{Base: npmRegistry}
+			pypi := registry.Checker{Base: pypiRegistry, Suffix: "/json"}
 			for _, entry := range entries {
+				findings := config.Check(entry)
+				if checkNames {
+					// The slopsquat check at the moment it matters: what this config is
+					// about to install, looked up before anything installs it.
+					findings = append(findings, config.CheckNames(entry, npm, pypi)...)
+				}
 				reports = append(reports, config.EntryReport{
 					Entry:    config.Redacted(entry),
-					Findings: config.Check(entry),
+					Findings: findings,
 					Notes:    config.Notes(entry),
 				})
 			}
@@ -100,6 +111,12 @@ func configCommand(dbPath, format *string) *cobra.Command {
 
 	command.Flags().BoolVar(&probeThem, "probe", false,
 		"also start each stdio server, scan its tools, and compare with the pinned baseline")
+	command.Flags().BoolVar(&checkNames, "check-names", false,
+		"look up every package the launch lines fetch, and flag names no registry knows (network)")
+	command.Flags().StringVar(&npmRegistry, "registry", "https://registry.npmjs.org",
+		"npm package-info endpoint for --check-names")
+	command.Flags().StringVar(&pypiRegistry, "pypi-registry", "https://pypi.org/pypi",
+		"PyPI package-info endpoint for --check-names")
 	return command
 }
 
