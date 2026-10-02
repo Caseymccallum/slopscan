@@ -9,6 +9,7 @@ package catalogue
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver, registered as "sqlite"
@@ -56,7 +57,16 @@ CREATE TABLE IF NOT EXISTS tools (
   weight REAL NOT NULL,
   confidence TEXT NOT NULL,
   reasons TEXT NOT NULL,
+  definition TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (server_id, name)
+);
+-- The baseline deliberately has no foreign key to servers: a re-scan replaces the servers row
+-- (that is how a new observation supersedes an old one), and a pinned baseline must survive that.
+-- A baseline dies when a person re-pins, never because something was scanned again.
+CREATE TABLE IF NOT EXISTS baselines (
+  server_id TEXT PRIMARY KEY,
+  pinned_at TEXT NOT NULL,
+  tools_json TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS findings (
   server_id TEXT NOT NULL,
@@ -80,12 +90,21 @@ CREATE INDEX IF NOT EXISTS tools_by_weight ON tools(weight);
 func (c *Catalogue) Close() error { return c.db.Close() }
 
 // Record stores the verdict for one server, replacing any earlier scan of the same id: a re-scan
-// is a new observation of the same thing, not a second thing.
+// is a new observation of the same thing, not a second thing. The raw tool definitions are stored
+// alongside the verdicts, because drift comparison needs the server's own words - the assessment
+// says what was thought of them, the definition is what they were.
 func (c *Catalogue) Record(
 	serverID, source string,
-	tools []risk.Assessment,
+	tools []risk.Tool,
+	assessments []risk.Assessment,
 	findings map[string][]injection.Finding,
 ) error {
+	definitions := map[string]string{}
+	for _, tool := range tools {
+		raw, _ := json.Marshal(tool)
+		definitions[tool.Name] = string(raw)
+	}
+
 	tx, err := c.db.Begin()
 	if err != nil {
 		return err
@@ -95,6 +114,12 @@ func (c *Catalogue) Record(
 	if _, err := tx.Exec(`DELETE FROM servers WHERE id = ?`, serverID); err != nil {
 		return err
 	}
+	// Findings are cleared here too rather than left to a cascade: a re-scan replaces the whole
+	// observation, and findings that outlived their scan would pile up under one server until the
+	// report said three times what it means once.
+	if _, err := tx.Exec(`DELETE FROM findings WHERE server_id = ?`, serverID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(
 		`INSERT INTO servers (id, source, scanned_at) VALUES (?, ?, ?)`,
 		serverID, source, time.Now().UTC().Format(time.RFC3339),
@@ -102,11 +127,12 @@ func (c *Catalogue) Record(
 		return err
 	}
 
-	for _, assessment := range tools {
+	for _, assessment := range assessments {
 		reasons, _ := json.Marshal(assessment.Reasons)
 		if _, err := tx.Exec(
-			`INSERT INTO tools (server_id, name, category, weight, confidence, reasons) VALUES (?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO tools (server_id, name, category, weight, confidence, reasons, definition) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			serverID, assessment.Tool, assessment.Category, assessment.Weight, assessment.Confidence, reasons,
+			definitions[assessment.Tool],
 		); err != nil {
 			return err
 		}
@@ -131,6 +157,83 @@ func (c *Catalogue) Source(serverID string) (string, error) {
 		return "", nil
 	}
 	return source, err
+}
+
+// Pin freezes the server's current tool definitions as the reviewed baseline: the copy every later
+// scan is compared against. Pinning is a deliberate act ("this is what I reviewed"), not an
+// automatic side effect of scanning - the whole point is that the baseline changes only when a
+// person says so.
+func (c *Catalogue) Pin(serverID string) error {
+	definitions, err := c.Definitions(serverID)
+	if err != nil {
+		return err
+	}
+	if len(definitions) == 0 {
+		return fmt.Errorf("nothing to pin: %s has no scanned tools", serverID)
+	}
+
+	raw, err := json.Marshal(definitions)
+	if err != nil {
+		return err
+	}
+
+	tx, err := c.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(`DELETE FROM baselines WHERE server_id = ?`, serverID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO baselines (server_id, pinned_at, tools_json) VALUES (?, ?, ?)`,
+		serverID, time.Now().UTC().Format(time.RFC3339), raw,
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// Baseline returns the pinned tool definitions for a server, or nil when nothing has been pinned.
+func (c *Catalogue) Baseline(serverID string) ([]risk.Tool, error) {
+	var raw string
+	err := c.db.QueryRow(`SELECT tools_json FROM baselines WHERE server_id = ?`, serverID).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var tools []risk.Tool
+	if err := json.Unmarshal([]byte(raw), &tools); err != nil {
+		return nil, err
+	}
+	return tools, nil
+}
+
+// Definitions returns the raw tool definitions recorded for one server - the server's own words,
+// kept so drift can compare what was reviewed with what is being said now.
+func (c *Catalogue) Definitions(serverID string) ([]risk.Tool, error) {
+	rows, err := c.db.Query(`SELECT definition FROM tools WHERE server_id = ? ORDER BY name`, serverID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	tools := []risk.Tool{}
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		var tool risk.Tool
+		if err := json.Unmarshal([]byte(raw), &tool); err != nil {
+			return nil, err
+		}
+		tools = append(tools, tool)
+	}
+	return tools, rows.Err()
 }
 
 // Servers lists every scanned server, riskiest first.

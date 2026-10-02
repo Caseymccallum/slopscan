@@ -8,12 +8,14 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
 
 	"github.com/Caseymccallum/slopscan/internal/catalogue"
+	"github.com/Caseymccallum/slopscan/internal/drift"
 	"github.com/Caseymccallum/slopscan/internal/injection"
 	"github.com/Caseymccallum/slopscan/internal/probe"
 	"github.com/Caseymccallum/slopscan/internal/registry"
@@ -21,7 +23,7 @@ import (
 	"github.com/Caseymccallum/slopscan/internal/risk"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 func main() {
 	root := &cobra.Command{
@@ -38,11 +40,25 @@ func main() {
 	var dbPath string
 	root.PersistentFlags().StringVar(&dbPath, "db", "slopscan.db", "path to the local catalogue")
 
-	root.AddCommand(scanCommand(&dbPath), probeCommand(&dbPath), dbCommand(&dbPath), namesCommand(), versionCommand())
+	root.AddCommand(
+		scanCommand(&dbPath), probeCommand(&dbPath), dbCommand(&dbPath),
+		pinCommand(&dbPath), driftCommand(&dbPath), namesCommand(), versionCommand(),
+	)
 	if err := root.Execute(); err != nil {
+		// Exit 3 for a broken baseline contract (the signal CI greps for), 1 for everything else.
+		var breaking *BreakingError
+		if errors.As(err, &breaking) {
+			os.Exit(3)
+		}
 		os.Exit(1)
 	}
 }
+
+// BreakingError marks "the server's tools changed in a way that breaks the reviewed baseline" -
+// distinct from a plain failure so a script can tell a rug pull from a typo.
+type BreakingError struct{ Message string }
+
+func (e *BreakingError) Error() string { return e.Message }
 
 // scanCommand reads a tool list (a JSON file of tools, as `tools/list` returns) and reports.
 func scanCommand(dbPath *string) *cobra.Command {
@@ -78,6 +94,9 @@ func scanCommand(dbPath *string) *cobra.Command {
 // analyse is the pipeline both scan and probe run: classify every tool, scan every description,
 // record the verdict, print the report. One implementation, so a probe and a file scan cannot
 // drift apart into two different notions of what was found.
+//
+// When a baseline has been pinned for this server, the same pass also compares against it and says
+// so in the report - because the moment that matters is the second scan, not the first.
 func analyse(cmd *cobra.Command, dbPath, serverID, source string, tools []risk.Tool) error {
 	assessments := make([]risk.Assessment, 0, len(tools))
 	findings := map[string][]injection.Finding{}
@@ -93,13 +112,43 @@ func analyse(cmd *cobra.Command, dbPath, serverID, source string, tools []risk.T
 		return err
 	}
 	defer cat.Close()
-	if err := cat.Record(serverID, source, assessments, findings); err != nil {
+	if err := cat.Record(serverID, source, tools, assessments, findings); err != nil {
 		return err
 	}
 
-	return report.Write(cmd.OutOrStdout(), report.Server{
+	if err := report.Write(cmd.OutOrStdout(), report.Server{
 		ID: serverID, Source: source, Tools: assessments, Findings: findings,
-	})
+	}); err != nil {
+		return err
+	}
+
+	return reportDrift(cmd, cat, serverID, tools)
+}
+
+// reportDrift compares this scan with the pinned baseline, if there is one. A first scan against
+// no baseline says nothing; every later one answers the only question that matters after review:
+// is the server still saying what it said when it was approved?
+func reportDrift(cmd *cobra.Command, cat *catalogue.Catalogue, serverID string, current []risk.Tool) error {
+	baseline, err := cat.Baseline(serverID)
+	if err != nil || len(baseline) == 0 {
+		return err
+	}
+
+	comparison := drift.Compare(baseline, current)
+	if !comparison.Drifted {
+		fmt.Fprintf(cmd.OutOrStdout(), "\nvs pinned baseline: unchanged (%d tools).\n", comparison.Unchanged)
+		return nil
+	}
+
+	if err := report.WriteDrift(cmd.OutOrStdout(), comparison); err != nil {
+		return err
+	}
+	// The same contract as the drift command: a breaking change fails the run, so CI stops on a
+	// rug pull instead of printing a warning nobody reads.
+	if comparison.Breaking {
+		return &BreakingError{Message: "breaking changes against the pinned baseline"}
+	}
+	return nil
 }
 
 // probeCommand asks a live MCP server for its tool list and reports on it.
@@ -131,6 +180,83 @@ func probeCommand(dbPath *string) *cobra.Command {
 
 	command.Flags().StringVar(&serverID, "id", "probed", "the server's identity in the catalogue")
 	return command
+}
+
+// pinCommand freezes a server's current tool surface as the reviewed baseline; driftCommand
+// compares what is in the catalogue now against that baseline and says what changed.
+func pinCommand(dbPath *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "pin <id>",
+		Short: "Freeze a server's current tools as the reviewed baseline",
+		Long: "Records what is in the catalogue right now as the copy every later scan of this " +
+			"server is compared against. Pinning is a deliberate act - the baseline changes only " +
+			"when you run this again - which is what makes a later difference meaningful.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cat, err := catalogue.Open(*dbPath)
+			if err != nil {
+				return err
+			}
+			defer cat.Close()
+
+			if err := cat.Pin(args[0]); err != nil {
+				return err
+			}
+			baseline, err := cat.Baseline(args[0])
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Pinned %d tool(s) as the baseline for %s.\n", len(baseline), args[0])
+			return nil
+		},
+	}
+}
+
+// driftCommand answers the question a re-scan raises: is the server still saying what it said
+// when it was approved? It reads both sides from the catalogue, so it works in CI without
+// touching the server at all.
+func driftCommand(dbPath *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "drift <id>",
+		Short: "Compare a server's current tools against its pinned baseline",
+		Long: "Reads the latest scan and the pinned baseline from the catalogue and reports every " +
+			"addition, removal and change. Exit code 3 means a breaking change - a tool removed, " +
+		"renamed, or a description rewritten - which is the shape of a rug pull as well as of " +
+			"ordinary breakage. Scan again first if the catalogue is stale.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cat, err := catalogue.Open(*dbPath)
+			if err != nil {
+				return err
+			}
+			defer cat.Close()
+
+			baseline, err := cat.Baseline(args[0])
+			if err != nil {
+				return err
+			}
+			if len(baseline) == 0 {
+				return fmt.Errorf("no pinned baseline for %s - run slopscan pin %s after a scan", args[0], args[0])
+			}
+			current, err := cat.Definitions(args[0])
+			if err != nil {
+				return err
+			}
+
+			comparison := drift.Compare(baseline, current)
+			if !comparison.Drifted {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s: unchanged against its pinned baseline (%d tools).\n", args[0], comparison.Unchanged)
+				return nil
+			}
+			if err := report.WriteDrift(cmd.OutOrStdout(), comparison); err != nil {
+				return err
+			}
+			if comparison.Breaking {
+				return &BreakingError{Message: "breaking changes against the pinned baseline"}
+			}
+			return nil
+		},
+	}
 }
 
 // dbCommand browses the catalogue: everything scanned, and one server in detail.

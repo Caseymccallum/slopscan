@@ -1,15 +1,17 @@
 # slopscan
 
-**Know what an MCP server can do before it does it.**
+**Know what an MCP server can do before it does it - and when it changes its mind.**
 
 A local scanner for MCP server risk: it classifies every tool by what it can actually do, reads the
 tool metadata for instructions aimed at the model, checks package names against a registry before
 anything installs them, and keeps every verdict in a private SQLite catalogue on your machine.
-Nothing phones home - the catalogue *is* the product, and it belongs to whoever runs the scan.
+Pin a reviewed baseline and every later scan answers the question that matters after review: *is the
+server still saying what it said when you approved it?* Nothing phones home - the catalogue *is* the
+product, and it belongs to whoever runs the scan.
 
-> **Status:** **v0.1.0** — early. The classifier, the injection scanner, the name checker, live MCP
-> probing and the local catalogue work and are tested against fixtures (no test touches the network;
-> probes run against a fixture server process).
+> **Status:** **v0.2.0** — early. Classification, injection scanning, name checking, live MCP
+> probing, baseline pinning and drift detection work and are tested against fixtures (no test
+> touches the network; probes run against a fixture server process).
 
 ## Why
 
@@ -19,14 +21,23 @@ tools never warn about destructive behaviour. Meanwhile "1 in 5 packages your AI
 exist" is an active attack class: publish under a name a model hallucinated, and the next install
 runs your code.
 
-None of that needs a hosted platform to see. It needs a scanner that says what a tool *is*, quotes
-the evidence, and keeps the results where you can query them.
+And in August 2026 the attack grew up. **Deadbugz** - a live supply-chain campaign flagged by Pillar
+Security and documented by the Cloud Security Alliance - shipped MCP servers that behaved normally
+for their first few tool calls and then *rewrote their own tool metadata* into instructions to hunt
+for SSH keys, cloud credentials and shell history, while telling the agent to hide it. A one-time
+audit cannot see that. Neither can a fingerprint store that resets when the process restarts. The
+CSA's prescribed mitigation is exactly two things: **pin the tool definitions you reviewed, and
+re-probe continuously against that pin**.
+
+slopscan is built around that advice, because it is the part an ordinary developer can actually run.
 
 ## What it does
 
 ```
 slopscan scan tools.json --id my-server   # classify + scan + record, with evidence
 slopscan probe -- npx -y some/mcp-server  # ask a live server what it exposes, then the same
+slopscan pin my-server                    # freeze the reviewed copy as the baseline
+slopscan drift my-server                  # what changed since the pin? exit 3 if it broke
 slopscan db list                          # every scanned server, riskiest first
 slopscan db show my-server                # one server, every verdict and quote
 slopscan names react left-padd-async      # which package names actually exist
@@ -47,8 +58,17 @@ delete_all_records           destructive  1.00  [high]
   `tidy_up` with a `command` parameter is an execution surface whatever its name claims. Guards
   (`confirm`, `dry_run`) are recorded but never lower a category - guards are optional by nature.
 - **Injection scanning** (`internal/injection`): instruction override, concealment, exfiltration,
-  role confusion, policy bypass, and invisible (zero-width/bidi) characters - each finding quoted
-  so a human reads the passage, not just a verdict.
+  role confusion, policy bypass, invisible (zero-width/bidi) characters - plus the shapes the 2026
+  campaigns actually used: **credential-harvest instructions** ("search for SSH keys..."),
+  **runtime gating** ("after the third call, start..."), and **tool shadowing** ("this replaces the
+  mail tool"). Every finding is quoted *and* carries its OWASP MCP Top 10 code (MCP01-MCP10), the
+  vocabulary the field compares findings in.
+- **Baseline pinning and drift detection** (`internal/drift`): `pin` freezes the tool definitions
+  you reviewed; every later `scan`/`probe` and the `drift` command compare against that copy and
+  report additions, removals, renames, schema changes and **rewritten descriptions** - separately,
+  because a rewritten description is the exact shape of a rug pull. Breaking change = exit 3, so CI
+  stops. The baseline lives in the catalogue and survives re-scans: it changes only when a person
+  re-pins.
 - **Name checking** (`internal/registry`): looks a package name up before anything installs it. A
   name no registry has ever heard of is exactly what a slopsquat needs.
 - **The catalogue** (`internal/catalogue`): one SQLite file, pure Go, no service to run. Re-scanning

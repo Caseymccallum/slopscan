@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Caseymccallum/slopscan/internal/drift"
 	"github.com/Caseymccallum/slopscan/internal/injection"
 	"github.com/Caseymccallum/slopscan/internal/risk"
 )
@@ -115,4 +116,29 @@ func truncate(value string, max int) string {
 		return value
 	}
 	return strings.TrimSpace(value[:max-1]) + "…"
+}
+
+// WriteDrift prints a drift comparison: what changed against the pinned baseline, and what it
+// means. Changes are listed breaking-first within their tools, because a removed tool is a
+// different kind of news than a new one.
+func WriteDrift(w io.Writer, report drift.Report) error {
+	if _, err := fmt.Fprintf(w, "\nvs pinned baseline: DRIFTED (score %d/100)\n", report.Score); err != nil {
+		return err
+	}
+	for _, change := range report.Changes {
+		marker := "+"
+		if change.Breaking {
+			marker = "!"
+		}
+		if _, err := fmt.Fprintf(w, "  %s %-24s %-20s %s\n",
+			marker, change.Tool, change.Kind, change.Detail); err != nil {
+			return err
+		}
+	}
+	if report.Breaking {
+		_, err := fmt.Fprintf(w, "  A breaking change means code or an agent relying on the old tool surface is now silently wrong. Re-review before trusting this server.\n")
+		return err
+	}
+	_, err := fmt.Fprintf(w, "  Additions only: nothing existing depends on the new tools, but nothing reviewed them either.\n")
+	return err
 }
