@@ -25,11 +25,15 @@ jobs:
         run: go test -race -count=1 -timeout 10m ./...
       - name: govulncheck
         run: |
-          # A flake in the module proxy or the vuln-DB fetch must not fake a red build,
-          # and a real finding must not be laundered by a retry: a genuine vulnerability
-          # fails every attempt just like a persistent error does.
+          # The pin must be new enough to parse the language version in go.mod: govulncheck
+          # v1.1.4 shipped an x/tools SSA builder that panics on Go 1.27-era syntax - the gate
+          # died before it could guard anything. v1.8.0 analyses the same code cleanly.
+          #
+          # The retry is for the network, not the verdict: a flake in the module proxy or the
+          # vuln-DB fetch must not fake a red build, and a real finding fails every attempt
+          # just like a persistent error - a retry cannot launder one.
           for attempt in 1 2 3; do
-            if go install golang.org/x/vuln/cmd/govulncheck@v1.1.4 && govulncheck ./...; then
+            if go install golang.org/x/vuln/cmd/govulncheck@v1.8.0 && govulncheck ./...; then
               exit 0
             fi
             echo "govulncheck attempt $attempt of 3 failed; retrying"
