@@ -78,8 +78,11 @@ delete_all_records           destructive  1.00  [high]
   stops. The baseline lives in the catalogue and survives re-scans: it changes only when a person
   re-pins. `watch` completes the loop: it re-probes a live server on an interval and ends at the
   first change - the continuous re-probing half of the rug-pull mitigation.
-- **Name checking** (`internal/registry`): looks a package name up before anything installs it. A
-  name no registry has ever heard of is exactly what a slopsquat needs.
+- **Name checking** (`internal/registry`): looks a package name up before anything installs it - and
+  looks *past* existence, because a typosquat exists by design: the name's shape is compared
+  against what squats are aimed at (`lookalike-name`) and the package's age is stated
+  (`fresh-package`: registered inside the 30-day slopsquat window). Facts and distance, quoted -
+  never a trust score.
 - **Config scanning** (`internal/config`): `slopscan config` reads the `mcpServers`/`servers` blocks
   that Claude Desktop, Cursor, Windsurf and VS Code actually load and checks what each entry
   launches - pipe-to-shell launch lines, unpinned package fetches, plaintext secrets in env (always

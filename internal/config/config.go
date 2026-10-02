@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -327,6 +328,31 @@ func CheckNames(entry Entry, npm, pypi registry.Checker) []Finding {
 			continue
 		}
 		if result.Exists {
+			// Existence is not innocence: a typosquat exists by design - the attacker
+			// published it. The shape of the name and the age of the package are the facts
+			// a registry knows and a publisher cannot go back and rewrite.
+			if neighbor, relation := registry.Near(pkg.Ecosystem, pkg.Name); neighbor != "" {
+				findings = append(findings, Finding{
+					Where:    "args",
+					Kind:     "lookalike-name",
+					OWASP:    "MCP04",
+					Quote: fmt.Sprintf("%q is %s %q - the typosquat's shape; check who "+
+						"published it and how long it has existed before trusting it",
+						pkg.Name, relation, neighbor),
+					Severity: "medium",
+				})
+			}
+			if fresh := registry.Freshness(result, time.Now()); fresh != "" {
+				findings = append(findings, Finding{
+					Where:    "args",
+					Kind:     "fresh-package",
+					OWASP:    "MCP04",
+					Quote: fmt.Sprintf("%q %s - inside the window a slopsquat lives in; a "+
+						"name fetched days after it appeared is a name someone is waiting on",
+						pkg.Name, fresh),
+					Severity: "medium",
+				})
+			}
 			continue
 		}
 		findings = append(findings, Finding{

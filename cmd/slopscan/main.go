@@ -528,7 +528,17 @@ func namesCommand() *cobra.Command {
 					fmt.Fprintf(cmd.OutOrStdout(), "%-40s DOES NOT EXIST — do not install\n", result.Name)
 					missing++
 				default:
-					fmt.Fprintf(cmd.OutOrStdout(), "%-40s exists\n", result.Name)
+					// Existence is not innocence: a typosquat exists by design. The line
+					// carries the facts a reader needs to decide, not just a green light.
+					fmt.Fprintf(cmd.OutOrStdout(), "%-40s exists", result.Name)
+					if fresh := registry.Freshness(result, time.Now()); fresh != "" {
+						fmt.Fprintf(cmd.OutOrStdout(), " — NEW, %s", fresh)
+					}
+					fmt.Fprintln(cmd.OutOrStdout())
+					if neighbor, relation := registry.Near("npm", result.Name); neighbor != "" {
+						fmt.Fprintf(cmd.OutOrStdout(), "%-40s ^ %s %q — the typosquat's shape; check the publisher and the age\n",
+							"", relation, neighbor)
+					}
 				}
 			}
 			if missing > 0 {

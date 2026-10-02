@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Caseymccallum/slopscan/internal/registry"
 )
@@ -320,5 +321,46 @@ func TestCheckNamesSaysUnverifiedNotClean(t *testing.T) {
 	findings := CheckNames(entry, checker, checker)
 	if len(findings) != 1 || findings[0].Kind != "package-unverified" {
 		t.Errorf("an unanswerable registry was not reported: %v", findings)
+	}
+}
+
+// Existence is not innocence: a typosquat exists by design, and the facts that give it away -
+// the shape of the name and the age of the package - become findings on the entry that fetches
+// it. The gate stays for what is proven (a name nothing publishes); these are evidence.
+func TestCheckNamesLooksPastExistence(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/lodsh" {
+			_, _ = w.Write([]byte(`{"name":"lodsh","time":{"created":"` + now + `"},"versions":{"1.0.0":{}}}`))
+			return
+		}
+		if r.URL.Path == "/plain-old-package" {
+			_, _ = w.Write([]byte(`{"name":"plain-old-package","time":{"created":"2019-01-01T00:00:00Z"},"versions":{"1.0.0":{}}}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	checker := registry.Checker{Base: server.URL}
+
+	squat := Entry{Type: "stdio", Command: "npx", Args: []string{"-y", "lodsh"}}
+	kinds := map[string]bool{}
+	for _, finding := range CheckNames(squat, checker, checker) {
+		kinds[finding.Kind] = true
+		if finding.OWASP != "MCP04" {
+			t.Errorf("slopsquat finding without MCP04: %+v", finding)
+		}
+	}
+	if !kinds["lookalike-name"] {
+		t.Errorf("the squat's shape not flagged: %v", kinds)
+	}
+	if !kinds["fresh-package"] {
+		t.Errorf("the squat's age not flagged: %v", kinds)
+	}
+
+	// An old, uniquely named package is exactly what clean looks like.
+	plain := Entry{Type: "stdio", Command: "npx", Args: []string{"-y", "plain-old-package"}}
+	if findings := CheckNames(plain, checker, checker); len(findings) != 0 {
+		t.Errorf("an old, distinct package was flagged: %v", findings)
 	}
 }

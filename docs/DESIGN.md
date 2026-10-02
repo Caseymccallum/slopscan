@@ -162,3 +162,19 @@ a projection of the same findings every other output prints - one implementation
 found, several renderings of it. Equally rejected: emitting on the happy path only, which trains
 teams to trust an empty Security tab as "clean" when it really means "the gate fired and the alerts
 were thrown away".
+
+## 14. Existence is not innocence
+
+*Chosen:* a name that exists is looked at harder, not waved through. The typosquat's problem is
+precisely that the attacker published it - so the existence check answers "yes" to malware by
+design. What a publisher cannot rewrite is the *shape* of the name (separator flips, dropped
+letters, transpositions against a corpus of what squats are aimed at) and the *age* of the
+package (a name registered days ago and fetched today is a name someone is waiting on). Both
+facts come from the registry's own record and are quoted as facts - date, count, neighbour,
+distance - never as a score.
+
+*Rejected:* a reputation score or a "trust" rating. A number hides the argument, and this one
+would be invented from the same two facts a reader can weigh themselves. Equally rejected:
+*blocking* on similarity - `lodsh` might be a real package somebody published in good faith, and
+medium-severity evidence is for a reviewer to judge. Only what is proven (a name no registry has
+ever heard of) keeps the gate.

@@ -8,6 +8,13 @@ not earn a version.
 
 ### Added
 
+- **Slopsquat checking past existence** (`registry.Near`, `registry.Freshness`): a typosquat
+  exists by design - the attacker published it - so `names` and `config --check-names` now weigh
+  the facts a publisher cannot rewrite: the shape of the name against a corpus of squat targets
+  (`lookalike-name`, separator flips and near-misses with the distance quoted) and the age of the
+  package (`fresh-package`: registered inside the 30-day slopsquat window, with date and version
+  count). Evidence at medium severity for a reviewer; only what is proven (a name nothing
+  publishes) keeps the gate.
 - **`--format sarif`** (SARIF 2.1.0) on `scan`, `probe`, `watch` and `config`: findings as results,
   finding kinds as OWASP-tagged rules, drift events as `drift/*` alerts - one deterministic
   document per run, so GitHub code scanning and every other platform can ingest it and alert

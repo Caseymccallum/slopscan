@@ -17,8 +17,15 @@ import (
 
 // Result is what a lookup found.
 type Result struct {
-	Name     string `json:"name"`
-	Exists   bool   `json:"exists"`
+	Name   string `json:"name"`
+	Exists bool   `json:"exists"`
+	// Created is when the package first appeared in the registry, zero when the registry did
+	// not say. Age is the fact a slopsquat cannot rewrite after publishing: the window in
+	// which a name is registered and waited on is exactly the window this records.
+	Created time.Time `json:"created"`
+	// Versions is how much has been published under the name (zero when unknown): one version
+	// registered days ago is the shape of a name made to be fetched once.
+	Versions int `json:"versions"`
 	// Populated when the registry answered but could not be understood, or did not answer.
 	Error string `json:"error,omitempty"`
 }
@@ -53,18 +60,84 @@ func (c Checker) Exists(name string) (Result, error) {
 
 	switch {
 	case response.StatusCode == http.StatusOK:
-		// The body is the packument; its existence is the answer, its contents are not needed.
+		// The body is the packument. Existence is the first answer; the facts it carries
+		// about when and how much was published are the second - they are what separates a
+		// package someone depends on from a name someone registered last week.
 		var packument map[string]any
 		if err := json.NewDecoder(response.Body).Decode(&packument); err != nil {
 			return Result{Name: name, Error: "registry sent a response that could not be read"}, err
 		}
-		return Result{Name: name, Exists: true}, nil
+		created, versions := packumentFacts(packument)
+		return Result{Name: name, Exists: true, Created: created, Versions: versions}, nil
 	case response.StatusCode == http.StatusNotFound:
 		return Result{Name: name, Exists: false}, nil
 	default:
 		return Result{Name: name, Error: fmt.Sprintf("registry answered %d", response.StatusCode)},
 			fmt.Errorf("registry answered %d for %s", response.StatusCode, name)
 	}
+}
+
+// packumentFacts pulls the two facts a package record carries in either ecosystem's format:
+// npm stamps `time.created` and counts `versions`; PyPI counts `releases` and stamps each
+// upload. A registry that answers with neither simply did not say, and zero is the answer.
+func packumentFacts(packument map[string]any) (time.Time, int) {
+	var created time.Time
+	versions := 0
+
+	if timing, ok := packument["time"].(map[string]any); ok {
+		if stamp, ok := timing["created"].(string); ok {
+			created, _ = time.Parse(time.RFC3339, stamp)
+		}
+	}
+	if listed, ok := packument["versions"].(map[string]any); ok {
+		versions = len(listed)
+	}
+
+	// PyPI: {"releases": {"1.0": [{"upload_time_iso_8601": "..."}]}} - the package appeared
+	// when its earliest release was uploaded.
+	if releases, ok := packument["releases"].(map[string]any); ok {
+		versions = len(releases)
+		for _, uploads := range releases {
+			list, _ := uploads.([]any)
+			for _, upload := range list {
+				fields, _ := upload.(map[string]any)
+				stamp, _ := fields["upload_time_iso_8601"].(string)
+				when, err := time.Parse(time.RFC3339, stamp)
+				if err != nil {
+					continue
+				}
+				if created.IsZero() || when.Before(created) {
+					created = when
+				}
+			}
+		}
+	}
+	return created, versions
+}
+
+// FreshWindow is how long a package stays "fresh". A slopsquat is registered and waited on -
+// the research's attack is patient by construction - so a name fetched days after it appeared
+// is exactly the case worth a second look. A month is the documented line; older packages are
+// ordinary and say nothing.
+const FreshWindow = 30 * 24 * time.Hour
+
+// Freshness describes a package's age in the terms the slopsquat question asks, or "" when the
+// package is too old to be interesting or the registry did not say. The description is facts
+// (date, age, count) - the judgement is the reader's.
+func Freshness(result Result, now time.Time) string {
+	if result.Created.IsZero() {
+		return ""
+	}
+	age := now.Sub(result.Created)
+	if age > FreshWindow {
+		return ""
+	}
+	days := int(age.Hours() / 24)
+	if days < 0 {
+		days = 0 // a clock difference is not evidence of anything
+	}
+	return fmt.Sprintf("was published %s (%d day(s) ago, %d version(s))",
+		result.Created.Format("2006-01-02"), days, result.Versions)
 }
 
 // CheckAll looks up every name and returns the results in order. A lookup that fails entirely is
