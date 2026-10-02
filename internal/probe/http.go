@@ -44,20 +44,10 @@ func ToolsURL(ctx context.Context, endpoint string, headers map[string]string) (
 	client := &http.Client{}
 	streamable := &httpTransport{url: endpoint, headers: headers, client: client}
 
-	reply, err := streamable.call(ctx, initializeRequest())
+	entries, err := listAll(ctx, streamable)
 	switch {
 	case err == nil:
-		if reply.Error != nil {
-			return nil, fmt.Errorf("initialize refused: %s", reply.Error.Message)
-		}
-		if err := streamable.notify(ctx, initializedNotification()); err != nil {
-			return nil, err
-		}
-		tools, err := streamable.call(ctx, toolsListRequest())
-		if err != nil {
-			return nil, fmt.Errorf("waiting for tools/list: %w", err)
-		}
-		return decodeTools(tools)
+		return entries, nil
 	case isLegacyRefusal(err):
 		// The endpoint refuses POSTs: this is the older transport, where the stream comes
 		// first and names where to post.
@@ -108,6 +98,9 @@ func (t *httpTransport) call(ctx context.Context, msg message) (message, error) 
 	var reply message
 	if err := json.NewDecoder(resp.Body).Decode(&reply); err != nil {
 		return message{}, fmt.Errorf("endpoint sent something unreadable: %w", err)
+	}
+	if reply.ID != msg.ID {
+		return message{}, fmt.Errorf("endpoint answered a different question (id %d, wanted %d)", reply.ID, msg.ID)
 	}
 	return reply, nil
 }
@@ -186,31 +179,24 @@ func toolsFromLegacySSE(ctx context.Context, endpoint string, headers map[string
 		}
 	}
 
-	legacy := &httpTransport{url: postURL, headers: headers, client: client}
-	initialized, err := legacy.callOn(ctx, events, initializeRequest())
-	if err != nil {
-		return nil, fmt.Errorf("waiting for initialize: %w", err)
-	}
-	if initialized.Error != nil {
-		return nil, fmt.Errorf("initialize refused: %s", initialized.Error.Message)
-	}
-	if err := legacy.notify(ctx, initializedNotification()); err != nil {
-		return nil, err
-	}
-	reply, err := legacy.callOn(ctx, events, toolsListRequest())
-	if err != nil {
-		return nil, fmt.Errorf("waiting for tools/list: %w", err)
-	}
-	return decodeTools(reply)
+	return listAll(ctx, &sseTransport{
+		httpTransport: httpTransport{url: postURL, headers: headers, client: client},
+		events:        events,
+	})
 }
 
-// callOn posts a request and waits for its answer on an open stream - the legacy transport's
-// shape, where the POST is fire-and-forget and the stream carries the reply.
-func (t *httpTransport) callOn(ctx context.Context, events <-chan sseEvent, msg message) (message, error) {
+// sseTransport posts requests and collects their answers from the open stream - the legacy
+// transport's shape, where the POST is fire-and-forget and the stream carries the reply.
+type sseTransport struct {
+	httpTransport
+	events <-chan sseEvent
+}
+
+func (t *sseTransport) call(ctx context.Context, msg message) (message, error) {
 	if _, err := t.post(ctx, msg); err != nil {
 		return message{}, err
 	}
-	return waitFor(ctx, events, msg.ID)
+	return waitFor(ctx, t.events, msg.ID)
 }
 
 // resolveURL turns the stream's endpoint notice into a postable URL: relative in every real

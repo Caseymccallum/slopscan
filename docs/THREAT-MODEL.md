@@ -14,6 +14,8 @@ executes server code, and never fetches anything but a package registry's existe
 | Threat | OWASP | How slopscan addresses it |
 | --- | --- | --- |
 | **Tool poisoning** - instructions embedded in tool descriptions aimed at the model | MCP03 | Injection scanning: every finding quoted, with its matched pattern named |
+| **Poisoned prompts and resources** - the other two metadata surfaces a server exposes, loaded into the model's context by clients | MCP10 | `probe` lists prompts and resources (with pagination) and every name and description is injection-scanned like a tool's; entries are pinned and drift-checked too, so a rewritten prompt is a noticed rug pull |
+| **Prompt overwrite** - a prompt presenting itself as the system's own instructions, claiming authority above every other instruction | MCP10 | `prompt-overwrite` rule; clean guards prove prompt administration is not flagged |
 | **Credential harvesting** - descriptions instructing the agent to hunt secrets (the 2026 Deadbugz payload) | MCP01 | `credential-harvest` rule |
 | **Runtime-gated behaviour** - benign until call N, then malicious (the Deadbugz trigger) | MCP03 | `runtime-gating` rule for metadata that counts calls; drift detection for what appears after the count - the metadata rewrite itself is caught whenever the tool list is re-read and compared |
 | **Rug pulls / silent tool drift** - the surface changes after review | MCP03 | Pin + drift: the reviewed definitions are frozen, every later scan compares, breaking change exits 3. `db history` answers *when* it changed, with the before and after derived from the recorded timeline |
@@ -35,9 +37,11 @@ executes server code, and never fetches anything but a package registry's existe
 - **A malicious server binary.** `probe` starts the server to ask it a question. Run probes of
   servers you do not trust in a container or VM - slopscan does not sandbox the process it spawns,
   and pretending otherwise would be the security theatre it exists to avoid.
-- **Poisoned tool *results*.** Instructions delivered inside tool outputs (rather than tool
-  definitions) reach the model at call time. Out of scope for a pre-deploy scanner; noted openly
-  because the gap is real and the field is honest about it too.
+- **The content behind a listing.** The probe reads what a server *says* it offers - tool,
+  prompt, and resource listings, paginated. What a resource contains when read, or what a prompt
+  renders when fetched, is the server producing output at runtime: that is the surface tapelog
+  mediates and sandboxes contain, and a scanner that fetches payloads into itself is asking to be
+  poisoned.
 - **The model itself.** No scanner can make a model refuse a convincing instruction. Slopscan's job
   is to make the instruction visible to the *human* reviewing the tool, with the passage quoted.
 - **An endpoint that refuses to answer.** Probing reaches every entry - stdio, streamable HTTP,

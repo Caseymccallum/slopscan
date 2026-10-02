@@ -16,12 +16,17 @@ import (
 // order. So the hash is over a canonical JSON rendering (json.Marshal of a map sorts keys
 // recursively), not over whatever bytes the server happened to send.
 
-// Fingerprint is the SHA-256 of a tool's canonical definition: name, description, input schema.
+// Fingerprint is the SHA-256 of a tool's canonical definition: name, description, input schema,
+// and which surface it came from with its address. Every piece of it is reviewable, so every
+// piece of it is identity - a resource whose URI moved is a different surface even when its
+// description did not change.
 func Fingerprint(tool Tool) string {
 	canonical, _ := json.Marshal(map[string]any{
 		"name":        tool.Name,
 		"description": tool.Description,
 		"inputSchema": tool.InputSchema,
+		"surface":     tool.Surface,
+		"uri":         tool.URI,
 	})
 	sum := sha256.Sum256(canonical)
 	return hex.EncodeToString(sum[:])

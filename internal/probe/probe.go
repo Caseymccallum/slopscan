@@ -88,41 +88,39 @@ func ToolsIn(ctx context.Context, env map[string]string, command string, args ..
 	reader := bufio.NewReader(stdout)
 	writer := bufio.NewWriter(stdin)
 
-	// The handshake: initialise, then the notification that says the client is ready. Both must
-	// complete before tools/list or a strict server will refuse the question.
-	if err := writeMessage(writer, initializeRequest()); err != nil {
-		return nil, err
-	}
+	// The handshake, then every listing surface the server offers. The listings are the whole
+	// question: what the server says about itself. Nothing on it is ever acted on.
+	return listAll(ctx, &stdioTransport{writer: writer, reader: reader})
+}
 
-	initialized, err := readMessage(reader)
-	if err != nil {
-		return nil, fmt.Errorf("waiting for initialize: %w", err)
-	}
-	if initialized.Error != nil {
-		return nil, fmt.Errorf("initialize refused: %s", initialized.Error.Message)
-	}
+// stdioTransport carries a call over the newline stream: write the message, wait for the reply
+// that carries its id. A notification or a late reply is not the answer to this question.
+type stdioTransport struct {
+	writer *bufio.Writer
+	reader *bufio.Reader
+}
 
-	if err := writeMessage(writer, initializedNotification()); err != nil {
-		return nil, err
+func (t *stdioTransport) call(ctx context.Context, msg message) (message, error) {
+	if err := writeMessage(t.writer, msg); err != nil {
+		return message{}, err
 	}
-	if err := writeMessage(writer, toolsListRequest()); err != nil {
-		return nil, err
-	}
-
 	for {
-		reply, err := readMessage(reader)
+		reply, err := readMessage(t.reader)
 		if err != nil {
-			return nil, fmt.Errorf("waiting for tools/list: %w", err)
+			return message{}, fmt.Errorf("waiting for %s: %w", msg.Method, err)
 		}
-		if reply.ID != 2 {
-			continue // a notification or a late reply is not the answer to this question
+		if reply.ID == msg.ID {
+			return reply, nil
 		}
-		return decodeTools(reply)
 	}
 }
 
+func (t *stdioTransport) notify(ctx context.Context, msg message) error {
+	return writeMessage(t.writer, msg)
+}
+
 // The handshake every transport speaks, in one place: initialize, the ready notification, and
-// the one question this package asks. A stdio line and an HTTP POST carry the same bytes.
+// the listings. A stdio line and an HTTP POST carry the same bytes.
 func initializeRequest() message {
 	return message{
 		JSONRPC: "2.0",
@@ -140,23 +138,71 @@ func initializedNotification() message {
 	return message{JSONRPC: "2.0", Method: "notifications/initialized"}
 }
 
-func toolsListRequest() message {
-	return message{JSONRPC: "2.0", ID: 2, Method: "tools/list"}
+// listPage is the shape all four listing replies share: a nextCursor and one populated array.
+type listPage struct {
+	Tools      []risk.Tool   `json:"tools"`
+	Prompts    []promptDef   `json:"prompts"`
+	Resources  []resourceDef `json:"resources"`
+	Templates  []resourceDef `json:"resourceTemplates"`
+	NextCursor string        `json:"nextCursor"`
 }
 
-// decodeTools pulls the tool list out of a tools/list reply - refused is refused, unreadable is
-// unreadable, and neither is ever reported as an empty list.
-func decodeTools(reply message) ([]risk.Tool, error) {
-	if reply.Error != nil {
-		return nil, fmt.Errorf("tools/list refused: %s", reply.Error.Message)
+// promptDef is a prompt as a server describes it: a name, a description, and arguments whose
+// descriptions reach the model too - so they are carried into the schema the scanner reads.
+type promptDef struct {
+	Name        string       `json:"name"`
+	Description string       `json:"description"`
+	Arguments   []promptArgs `json:"arguments"`
+}
+
+type promptArgs struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// resourceDef is a resource or resource template: named text at an address. The address is
+// identity - it travels with the definition so a moved resource is a noticed change.
+type resourceDef struct {
+	URI         string `json:"uri"`
+	URITemplate string `json:"uriTemplate"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// listAll runs the handshake and reads every listing surface: the three things a server says
+// about itself. Tools are the question the probe requires; prompts and resources are offered -
+// a server that refuses them exposes none the agent could see either.
+func listAll(ctx context.Context, t transport) ([]risk.Tool, error) {
+	initialized, err := t.call(ctx, initializeRequest())
+	if err != nil {
+		return nil, fmt.Errorf("waiting for initialize: %w", err)
 	}
-	var result struct {
-		Tools []risk.Tool `json:"tools"`
+	if initialized.Error != nil {
+		return nil, fmt.Errorf("initialize refused: %s", initialized.Error.Message)
 	}
-	if err := json.Unmarshal(reply.Result, &result); err != nil {
-		return nil, fmt.Errorf("tools/list sent something unreadable: %w", err)
+	if err := t.notify(ctx, initializedNotification()); err != nil {
+		return nil, err
 	}
-	return result.Tools, nil
+
+	entries := []risk.Tool{}
+	nextID := 2
+	for _, listing := range []struct {
+		method   string
+		surface  string
+		required bool
+	}{
+		{"tools/list", "", true},
+		{"prompts/list", "prompt", false},
+		{"resources/list", "resource", false},
+		{"resources/templates/list", "resource", false},
+	} {
+		found, err := listSurface(ctx, t, listing.method, listing.surface, listing.required, &nextID)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, found...)
+	}
+	return entries, nil
 }
 
 func writeMessage(writer *bufio.Writer, msg message) error {
@@ -190,4 +236,71 @@ func readMessage(reader *bufio.Reader) (message, error) {
 func mustJSON(value any) json.RawMessage {
 	raw, _ := json.Marshal(value)
 	return raw
+}
+
+// listSurface reads one listing, following nextCursor to the end - a rug pull must not be able
+// to hide on page 2 of the very listing the probe is pinning.
+func listSurface(ctx context.Context, t transport, method, surface string, required bool, nextID *int) ([]risk.Tool, error) {
+	entries := []risk.Tool{}
+	cursor := ""
+	for {
+		params := map[string]any{}
+		if cursor != "" {
+			params["cursor"] = cursor
+		}
+		id := *nextID
+		*nextID = *nextID + 1
+
+		reply, err := t.call(ctx, message{JSONRPC: "2.0", ID: id, Method: method, Params: mustJSON(params)})
+		if err != nil || reply.Error != nil {
+			if required {
+				if err != nil {
+					return nil, fmt.Errorf("waiting for %s: %w", method, err)
+				}
+				return nil, fmt.Errorf("%s refused: %s", method, reply.Error.Message)
+			}
+			// An optional surface that will not answer is absent to the agent too: a client
+			// that cannot list a prompt never loads it into anyone's context.
+			return nil, nil
+		}
+
+		var page listPage
+		if err := json.Unmarshal(reply.Result, &page); err != nil {
+			if required {
+				return nil, fmt.Errorf("%s sent something unreadable: %w", method, err)
+			}
+			return nil, nil
+		}
+		entries = append(entries, page.entries(surface)...)
+		if page.NextCursor == "" {
+			return entries, nil
+		}
+		cursor = page.NextCursor
+	}
+}
+
+// entries flattens whichever array the reply carried, mapped onto the common definition.
+func (p listPage) entries(surface string) []risk.Tool {
+	out := []risk.Tool{}
+	for _, tool := range p.Tools {
+		out = append(out, tool)
+	}
+	for _, prompt := range p.Prompts {
+		properties := map[string]any{}
+		for _, arg := range prompt.Arguments {
+			properties[arg.Name] = map[string]any{"type": "string", "description": arg.Description}
+		}
+		entry := risk.Tool{Name: prompt.Name, Description: prompt.Description, Surface: surface}
+		if len(properties) > 0 {
+			entry.InputSchema = map[string]any{"type": "object", "properties": properties}
+		}
+		out = append(out, entry)
+	}
+	for _, resource := range p.Resources {
+		out = append(out, risk.Tool{Name: resource.Name, Description: resource.Description, Surface: surface, URI: resource.URI})
+	}
+	for _, template := range p.Templates {
+		out = append(out, risk.Tool{Name: template.Name, Description: template.Description, Surface: surface, URI: template.URITemplate})
+	}
+	return out
 }

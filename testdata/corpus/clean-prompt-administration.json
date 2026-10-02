@@ -1,0 +1,14 @@
+{
+  "source": "Clean guard: a tool that legitimately manages an assistant's system prompts - administration is not overwrite",
+  "tools": [
+    {
+      "name": "update_system_prompt",
+      "description": "Update the system prompt configured for this assistant. Requires an administrator."
+    },
+    {
+      "name": "list_personas",
+      "description": "List the personas configured for this workspace, with their names and owners."
+    }
+  ],
+  "expect": []
+}

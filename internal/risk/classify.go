@@ -22,15 +22,22 @@ const (
 	Destructive Category = "destructive"
 	Financial   Category = "financial"
 	Other       Category = "other"
+	// Context is what a prompt or resource does: it enters the model's context. It cannot act
+	// on the systems behind it, so its weight is zero - the risk it carries is the text itself,
+	// and the findings report that. This is the honest category for the surfaces no classifier
+	// can classify: their danger is not capability.
+	Context Category = "context"
 )
 
 func (c Category) String() string { return string(c) }
 
 // Weight is the risk weight of a category on the scale the ecosystem's audits use: 0.0 for
-// read-only, 1.0 for destructive.
+// read-only, 1.0 for destructive. Context weighs nothing because it can do nothing - by itself.
 func (c Category) Weight() float64 {
 	switch c {
 	case Read:
+		return 0.0
+	case Context:
 		return 0.0
 	case Write:
 		return 0.35
@@ -123,6 +130,30 @@ type Tool struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
 	InputSchema map[string]any `json:"inputSchema"`
+	// Surface is which listing the entry came from: "" for tools (the default, everywhere
+	// tools exist), "prompt" and "resource" for the other metadata surfaces a server offers.
+	// All three carry names and descriptions that reach the model; only one is callable.
+	Surface string `json:"surface,omitempty"`
+	// URI is where a resource lives (or its template) - its address is part of its identity,
+	// and a changed address is a changed surface even when the words stay put.
+	URI string `json:"uri,omitempty"`
+}
+
+// OfSurface is the assessment for an entry no capability classifier can classify: a prompt or a
+// resource's danger is the text it carries, not what it does - so it is Context, weight zero,
+// with its surface named and the text assessed by the injection scan like everything else.
+func OfSurface(tool Tool) Assessment {
+	kind := tool.Surface
+	if kind == "" {
+		kind = "entry"
+	}
+	return Assessment{
+		Tool:       tool.Name,
+		Category:   Context,
+		Weight:     0,
+		Reasons:    []string{"a " + kind + " enters the model's context; its risk is its text, which the findings report"},
+		Confidence: "high",
+	}
 }
 
 // Classify decides one tool's category and explains why.

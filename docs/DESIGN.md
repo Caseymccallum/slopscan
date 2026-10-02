@@ -193,3 +193,20 @@ was a gap, not a design. Equally rejected: growing the probe into a full MCP cli
 flows and tool invocation. A server that demands an interactive login refuses the listing, and
 that refusal is reported as an error - never as an empty clean list (the same honesty rule as the
 registry's "unverified").
+
+## 16. What a server *says* it is includes all three surfaces
+
+*Chosen:* the probe reads every listing - `tools/list`, `prompts/list`, `resources/list`,
+`resources/templates/list` - following pagination to the end. Decision 7's promise holds and is
+tested harder than before: listings are read and nothing is acted on, ever. Prompts and resources
+are first-class entries afterwards: their names and descriptions are injection-scanned, prompt
+arguments travel as schema, resource URIs travel as identity, and all of it is pinned and
+drift-checked - a rewritten prompt is a rug pull like any other. Their honest category is
+`context`: they cannot act on a system, so their weight is zero and their risk is their text.
+
+*Rejected:* classifying prompts and resources by the capability verbs - "delete_everything
+prompt" is not a destructive capability, and pretending otherwise is score fabrication by
+another name. Equally rejected: fetching resource contents or rendering prompts to scan them.
+Output the server produces at runtime is tapelog's surface (decision 7's line held): a scanner
+that pulls untrusted content into itself to judge it is asking to be the next finding. An
+optional listing that refuses is absent to the agent too, so absence is reported, not guessed.

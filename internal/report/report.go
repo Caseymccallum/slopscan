@@ -64,8 +64,8 @@ func Write(w io.Writer, server Server) error {
 		}
 	}
 
-	if _, err := fmt.Fprintf(w, "%s  (%d tools, %d destructive, risk score %.1f)\n  source: %s\n\n",
-		server.ID, len(server.Tools), destructive, weight, server.Source); err != nil {
+	if _, err := fmt.Fprintf(w, "%s  (%d %s, %d destructive, risk score %.1f)\n  source: %s\n\n",
+		server.ID, len(server.Tools), entryWord(server.Tools), destructive, weight, server.Source); err != nil {
 		return err
 	}
 
@@ -95,12 +95,23 @@ func WriteSummary(w io.Writer, servers []Server) error {
 		return riskOf(servers[i]) > riskOf(servers[j])
 	})
 	for _, server := range servers {
-		if _, err := fmt.Fprintf(w, "%-40s %3d tools  risk %6.1f  %s\n",
-			truncate(server.ID, 40), len(server.Tools), riskOf(server), verdict(server)); err != nil {
+		if _, err := fmt.Fprintf(w, "%-40s %3d %s  risk %6.1f  %s\n",
+			truncate(server.ID, 40), len(server.Tools), entryWord(server.Tools), riskOf(server), verdict(server)); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// entryWord is the honest count noun: a server listing prompts and resources has entries, not
+// only tools, and a report that miscounts what it read is a report a reader learns to distrust.
+func entryWord(assessments []risk.Assessment) string {
+	for _, assessment := range assessments {
+		if assessment.Category == risk.Context {
+			return "entries"
+		}
+	}
+	return "tools"
 }
 
 func riskOf(server Server) float64 {

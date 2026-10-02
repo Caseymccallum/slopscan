@@ -125,6 +125,18 @@ var rules = []rule{
 		owasp:    "MCP06",
 		pattern:  regexp.MustCompile(`(?i)(when\s+asked\s+about|if\s+(the\s+)?user\s+asks).{0,80}(always|instead|rather\s+than|do\s+not)`),
 	},
+	{
+		// Prompt overwrite: a description presenting itself AS the system's own instructions -
+		// "this is the system prompt", "master instructions:". On the prompts surface this is
+		// the attack's whole shape: the entry a client loads into the model's context claiming
+		// to be the authority above every other instruction. MCP10 - context injection - is
+		// what this is, wherever it is found.
+		kind:     "prompt-overwrite",
+		severity: "high",
+		owasp:    "MCP10",
+		pattern: regexp.MustCompile(`(?i)(this|it)\s+is\s+the\s+(system|master|official)\s+(prompt|instructions?|persona)|` +
+			`^(system|master)\s+(prompt|instructions?)\s*[:\-]|^(you\s+are\s+the\s+assistant|act\s+as\s+the\s+system)\b`),
+	},
 }
 
 // invisible is the zero-width and bidirectional-override characters that hide text from a human

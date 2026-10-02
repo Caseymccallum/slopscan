@@ -8,6 +8,14 @@ not earn a version.
 
 ### Added
 
+- **All three metadata surfaces scanned** — MCP servers expose tools, prompts, and resources, and
+  all three carry names and descriptions that reach the model; competitors (and slopscan, until
+  now) scanned only the first. `probe` now reads every listing with pagination (a rug pull must
+  not hide on page 2), prompt arguments travel as schema, resource URIs as identity. Entries are
+  classified `context` (weight 0 — their risk is their text, which the findings report), scanned
+  for injection, pinned, drift-checked, and excluded from tapelog packs (a prompt is not a call).
+  New `prompt-overwrite` rule (MCP10) for the attack this surface invites: a prompt presenting
+  itself as the system's own instructions.
 - **Remote probing — the gap every report printed is closed.** `probe` now speaks all three MCP
   transports: stdio, **streamable HTTP** (JSON or SSE answers, `Mcp-Session-Id` and protocol
   headers honoured) and **legacy HTTP+SSE** (the stream names its POST endpoint). `config --probe`

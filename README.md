@@ -72,6 +72,11 @@ delete_all_records           destructive  1.00  [high]
   **runtime gating** ("after the third call, start..."), and **tool shadowing** ("this replaces the
   mail tool"). Every finding is quoted *and* carries its OWASP MCP Top 10 code (MCP01-MCP10), the
   vocabulary the field compares findings in.
+- **All three surfaces, not just tools** (`internal/probe`): MCP servers also expose prompts and
+  resources, and their names and descriptions reach the model just the same. The probe reads every
+  listing (paginated), prompt arguments travel as schema, resource URIs as identity; all entries
+  are scanned, pinned, and drift-checked - a rewritten prompt is a rug pull like any other. Their
+  risk is their text, never a capability score: prompts and resources are `context`, weight 0.
 - **Baseline pinning and drift detection** (`internal/drift`): `pin` freezes the tool definitions
   you reviewed; every later `scan`/`probe` and the `drift` command compare against that copy and
   report additions, removals, renames, schema changes and **rewritten descriptions** - separately,

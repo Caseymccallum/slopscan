@@ -64,6 +64,11 @@ func Build(serverID, source string, assessments []risk.Assessment, findings map[
 	}
 
 	for _, assessment := range assessments {
+		// A prompt or resource is not a call: tapelog rules govern what an agent invokes, and
+		// nothing here can be invoked. The text risks it carries are findings, not rules.
+		if assessment.Category == risk.Context {
+			continue
+		}
 		action := "confirm"
 		switch {
 		case injection.Worst(findings[assessment.Tool]) == "high":

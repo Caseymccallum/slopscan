@@ -114,7 +114,13 @@ func evaluate(dbPath, serverID, source string, tools []risk.Tool) (report.Server
 	assessments := make([]risk.Assessment, 0, len(tools))
 	findings := map[string][]injection.Finding{}
 	for _, tool := range tools {
-		assessments = append(assessments, risk.Classify(tool))
+		// Tools get classified by capability; prompts and resources get the honest assessment
+		// of what they are - text entering the model's context, judged by the scan below.
+		if tool.Surface == "" {
+			assessments = append(assessments, risk.Classify(tool))
+		} else {
+			assessments = append(assessments, risk.OfSurface(tool))
+		}
 		if found := injection.ScanTool(tool.Name, tool.Description, tool.InputSchema); len(found) > 0 {
 			findings[tool.Name] = found
 		}
