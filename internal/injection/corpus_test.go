@@ -18,8 +18,9 @@ import (
 // does this rule exist" should be answerable from the fixture alone.
 
 type corpusTool struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	InputSchema map[string]any `json:"inputSchema"`
 }
 
 type corpusFile struct {
@@ -63,7 +64,7 @@ func TestCorpus(t *testing.T) {
 
 			kinds := map[string]bool{}
 			for _, tool := range tools {
-				for _, finding := range Scan(tool.Name, tool.Description) {
+				for _, finding := range ScanTool(tool.Name, tool.Description, tool.InputSchema) {
 					kinds[finding.Kind] = true
 				}
 			}

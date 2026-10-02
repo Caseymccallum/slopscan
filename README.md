@@ -35,6 +35,7 @@ slopscan is built around that advice, because it is the part an ordinary develop
 
 ```
 slopscan scan tools.json --id my-server   # classify + scan + record, with evidence
+slopscan config claude_desktop_config.json # check the launch lines before they launch
 slopscan probe -- npx -y some/mcp-server  # ask a live server what it exposes, then the same
 slopscan pin my-server                    # freeze the reviewed copy as the baseline
 slopscan drift my-server                  # what changed since the pin? exit 3 if it broke
@@ -77,6 +78,11 @@ delete_all_records           destructive  1.00  [high]
   first change - the continuous re-probing half of the rug-pull mitigation.
 - **Name checking** (`internal/registry`): looks a package name up before anything installs it. A
   name no registry has ever heard of is exactly what a slopsquat needs.
+- **Config scanning** (`internal/config`): `slopscan config` reads the `mcpServers`/`servers` blocks
+  that Claude Desktop, Cursor, Windsurf and VS Code actually load and checks what each entry
+  launches - pipe-to-shell launch lines, unpinned package fetches, plaintext secrets in env (always
+  redacted), filesystem handovers of everything. Transport rules never fire on a local process;
+  every report says what was evaluated and what was not.
 - **The tapelog bridge** (`internal/policy`): `slopscan policy <id>` writes a tapelog policy pack
   from a scan - the verdicts translated into the rules tapelog enforces mid-call, verified to load
   in tapelog's own `policy test`. Scan with slopscan, enforce with tapelog: two tools, one defence.

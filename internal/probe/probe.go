@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 
 	"github.com/Caseymccallum/slopscan/internal/risk"
@@ -44,11 +45,25 @@ type rpcError struct {
 // is read. Whatever the listing says about itself is what comes back - which is exactly the input
 // the classifier and the injection scanner want.
 func Tools(ctx context.Context, command string, args ...string) ([]risk.Tool, error) {
+	return ToolsIn(ctx, nil, command, args...)
+}
+
+// ToolsIn is Tools with the environment a client configuration declares - the same env the agent
+// would launch the server with, so the listing comes from the server as it really runs.
+func ToolsIn(ctx context.Context, env map[string]string, command string, args ...string) ([]risk.Tool, error) {
 	if command == "" {
 		return nil, fmt.Errorf("no server command given")
 	}
 
 	process := exec.CommandContext(ctx, command, args...)
+	if len(env) > 0 {
+		// Seeded from the parent environment: replacing it outright would leave the server
+		// without PATH and everything else it needs to start.
+		process.Env = os.Environ()
+		for key, value := range env {
+			process.Env = append(process.Env, key+"="+value)
+		}
+	}
 	stdin, err := process.StdinPipe()
 	if err != nil {
 		return nil, err

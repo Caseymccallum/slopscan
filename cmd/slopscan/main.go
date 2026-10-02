@@ -50,6 +50,7 @@ func main() {
 
 	root.AddCommand(
 		scanCommand(&dbPath, &format), probeCommand(&dbPath, &format), watchCommand(&dbPath, &format),
+		configCommand(&dbPath, &format),
 		dbCommand(&dbPath, &format), pinCommand(&dbPath), driftCommand(&dbPath, &format),
 		policyCommand(&dbPath), namesCommand(), versionCommand(),
 	)
@@ -114,7 +115,7 @@ func evaluate(dbPath, serverID, source string, tools []risk.Tool) (report.Server
 	findings := map[string][]injection.Finding{}
 	for _, tool := range tools {
 		assessments = append(assessments, risk.Classify(tool))
-		if found := injection.Scan(tool.Name, tool.Description); len(found) > 0 {
+		if found := injection.ScanTool(tool.Name, tool.Description, tool.InputSchema); len(found) > 0 {
 			findings[tool.Name] = found
 		}
 	}

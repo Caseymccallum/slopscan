@@ -8,14 +8,16 @@
 package injection
 
 import (
+	"encoding/json"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
 
 // Finding is one suspicious passage, quoted so it can be read.
 type Finding struct {
-	// Where the passage was found: tool name or description.
+	// Where the passage was found: tool name, description, or input schema.
 	Where string `json:"where"`
 	// The category of the pattern that matched.
 	Kind string `json:"kind"`
@@ -128,6 +130,97 @@ var rules = []rule{
 // invisible is the zero-width and bidirectional-override characters that hide text from a human
 // reviewer while a model still reads it. Their mere presence in a description is worth a flag.
 var invisible = regexp.MustCompile(`[\x{200B}\x{200C}\x{200D}\x{2060}\x{2066}\x{2067}\x{2068}\x{2069}\x{FEFF}\x{202A}\x{202B}\x{202C}\x{202D}\x{202E}]`)
+
+// The write-sink rule is structural rather than textual: it needs the input schema to see that a
+// caller controls a file path, and the description to see that nothing bounds the write. This is
+// the metadata-level shape of 2026's path-traversal CVEs (CVE-2026-27825 and its three siblings):
+// a file path built from caller-controlled input, written without a directory-boundary check.
+// Scanners historically test the read side - "can it leak /etc/passwd" - and miss the write side,
+// where the blast radius actually lives. Every real exploit this year landed there.
+
+// pathParamNames are schema property names that hand a caller a filesystem location.
+var pathParamNames = map[string]bool{
+	"path": true, "file_path": true, "filepath": true, "file": true, "filename": true,
+	"file_name": true, "destination": true, "dest": true, "dest_path": true, "target": true,
+	"target_path": true, "output": true, "output_path": true, "save_path": true, "write_path": true,
+	"save_to": true, "location": true, "dir": true, "directory": true, "folder": true,
+}
+
+// materializeVerbs are words saying the tool puts content somewhere on disk - the write half of
+// the traversal class. "written" is included because descriptions say "written to".
+var materializeVerbs = regexp.MustCompile(`(?i)\b(writes?|written|saving|saves?|storing|stores?|` +
+	`created|creates?|copies|copying|moves?|moving|uploads?|uploading|downloads?|downloading|` +
+	`exports?|exporting|dumps?|persists?|appends?|attachments?)\b`)
+
+// boundaryWords are the contract saying where a write may go. Their presence is the fix the CVE
+// write-ups ask for - a stated directory boundary - so a tool that states one is not flagged.
+var boundaryWords = regexp.MustCompile(`(?i)\b(within|confined to|restricted to|limited to|inside|` +
+	`relative to|beneath|underneath)\b|\b(workspace|sandbox|base|root|allowed|configured|chosen|` +
+	`upload|output|destination|target)\s+(directory|dir|folder|path|location|root)|` +
+	`\b(directory|dir|folder|path|location)\s+(only|must|may not|cannot|is rejected|is refused)|` +
+	`\boutside\b.{0,30}\b(reject|refuse|denied|error|fail|not allowed)`)
+
+// ScanTool is Scan plus the checks that need the input schema. Anything assessing a real tool
+// definition should call this one; Scan stays for callers that only have text.
+func ScanTool(name, description string, schema map[string]any) []Finding {
+	return append(Scan(name, description), scanWritePath(name, description, schema)...)
+}
+
+// scanWritePath flags a caller-controlled path that the description never bounds: a materializing
+// verb, a path-shaped parameter, and no stated boundary. All three must hold, so a plain read_file
+// is quiet and a write tool that names its directory is quiet - only the unbounded write sinks of
+// the 2026 CVEs are flagged, at medium: the metadata cannot prove the server skips validation,
+// only that the contract never promised it. That is worth a reviewer's minute, not a verdict.
+func scanWritePath(name, description string, schema map[string]any) []Finding {
+	paths := pathParams(schema)
+	if len(paths) == 0 {
+		return nil
+	}
+	// Underscores are word characters, so "download" has no boundary inside download_attachment.
+	// Naming a tool in snake_case must not hide its verbs from the verb check.
+	text := strings.ReplaceAll(name+" "+description, "_", " ")
+	if !materializeVerbs.MatchString(text) {
+		return nil
+	}
+	// The boundary may be stated in the description or in the schema's own property text; both are
+	// the contract, and either one is the fix.
+	if boundaryWords.MatchString(description) || boundaryWords.MatchString(schemaText(schema)) {
+		return nil
+	}
+	return []Finding{{
+		Where:    "inputSchema",
+		Kind:     "unchecked-path-write",
+		OWASP:    "MCP02",
+		Quote: "writes to a caller-controlled path (" + strings.Join(paths, ", ") +
+			") and the description never says where the write may go",
+		Severity: "medium",
+	}}
+}
+
+// pathParams lists the schema property names that take a filesystem location, in schema order.
+func pathParams(schema map[string]any) []string {
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	found := []string{}
+	for name := range properties {
+		if pathParamNames[strings.ToLower(name)] {
+			found = append(found, name)
+		}
+	}
+	sort.Strings(found)
+	return found
+}
+
+// schemaText renders the schema as text so property descriptions can be read for boundary words.
+func schemaText(schema map[string]any) string {
+	raw, err := json.Marshal(schema)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
 
 // Scan looks at one tool's name and description and quotes anything addressed to the model.
 func Scan(name, description string) []Finding {

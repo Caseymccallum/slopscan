@@ -92,3 +92,30 @@ read either.
 *Rejected:* a buffered reader that accumulates JSON until braces balance. That would paper over
 what is, per the spec, a broken server - and silently succeeding against broken servers is how
 scanners learn to lie.
+
+## 9. The config file is an attack surface, and scoping is printed
+
+*Chosen:* `slopscan config` reads the `mcpServers`/`servers` blocks that Claude Desktop, Cursor,
+Windsurf and VS Code actually load - the format everyone uses and most scanners misparse into an
+empty object and a wall of NO_AUTH noise. Checks are scoped by entry type: stdio entries get
+launch-line analysis (pipe-to-shell, unpinned package fetches, plaintext env secrets, broad
+filesystem mounts) and never see a transport rule; remote entries get transport checks and say
+openly that their tool list was not fetched. High findings exit 1: a config is a gate, like
+`names` refusing a name that does not exist.
+
+*Rejected:* running network rules against local processes, because "NO_AUTH" on a stdio entry is
+noise engineered to look like rigor. Equally rejected: a silent pass over what was not evaluated -
+every report names its own gap.
+
+## 10. Test the write side
+
+*Chosen:* the `unchecked-path-write` rule targets the shape shared by CVE-2026-27825 (CVSS 9.1) and
+its three 2026 siblings: a caller-controlled path parameter, a materializing verb, and a
+description that never states a directory boundary. The fix the write-ups ask for - state the
+boundary - makes the finding go away, so the rule teaches its own remediation. Severity is
+medium: metadata cannot prove the server skips validation, only that the contract never promised
+it.
+
+*Rejected:* flagging every tool with a path parameter. Read tools are quiet (the verb half must
+hold), and bounded write tools are quiet - the corpus's clean guards enforce both directions,
+because a scanner that flags everything is as useless as one that flags nothing.

@@ -63,6 +63,58 @@ func TestCredentialHarvestIsFound(t *testing.T) {
 	}
 }
 
+// The 2026 write-sink CVEs (CVE-2026-27825 and siblings): a caller-controlled path written with no
+// stated boundary. The rule needs all three signals - a write verb, a path parameter, no boundary.
+func TestUncheckedPathWriteIsFound(t *testing.T) {
+	schema := map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"file_path": map[string]any{"type": "string"}},
+	}
+	findings := ScanTool("confluence_download_attachment",
+		"Download a Confluence attachment to the specified local file.", schema)
+	found := false
+	for _, finding := range findings {
+		if finding.Kind == "unchecked-path-write" && finding.OWASP == "MCP02" {
+			found = true
+			if finding.Quote == "" {
+				t.Error("finding carries no quote to read")
+			}
+		}
+	}
+	if !found {
+		t.Errorf("unchecked path write not found: %v", findings)
+	}
+}
+
+// The fix the CVE write-ups ask for - a stated directory boundary - makes the finding go away.
+func TestBoundedPathWriteIsQuiet(t *testing.T) {
+	for _, tool := range []struct {
+		name, description string
+		schema            map[string]any
+	}{
+		{"save_note", "Save a note to a file. Writes are confined to the workspace directory.",
+			map[string]any{"properties": map[string]any{"path": map[string]any{"type": "string"}}}},
+		{"export_report", "Export a report. The output path is restricted to the configured export directory.",
+			map[string]any{"properties": map[string]any{"output_path": map[string]any{"type": "string"}}}},
+		{"download_attachment", "Download an attachment. Paths outside the upload directory are rejected.",
+			map[string]any{"properties": map[string]any{"file_path": map[string]any{"type": "string"}}}},
+	} {
+		if findings := ScanTool(tool.name, tool.description, tool.schema); len(findings) != 0 {
+			t.Errorf("%s with a stated boundary was flagged: %v", tool.name, findings)
+		}
+	}
+}
+
+// A read tool with a path parameter is not a write sink: the verb half must hold too.
+func TestPathParameterWithoutWriteVerbIsQuiet(t *testing.T) {
+	schema := map[string]any{
+		"properties": map[string]any{"path": map[string]any{"type": "string"}},
+	}
+	if findings := ScanTool("read_file", "Read the contents of a file at a given path.", schema); len(findings) != 0 {
+		t.Errorf("read tool flagged as a write sink: %v", findings)
+	}
+}
+
 // The Deadbugz trigger: a description that counts the caller's calls - in the campaign's own
 // phrasing, not just a tidy synthetic one.
 func TestRuntimeGatingIsFound(t *testing.T) {

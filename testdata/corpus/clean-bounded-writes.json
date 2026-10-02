@@ -1,0 +1,38 @@
+{
+  "source": "Clean guard: the fix the CVE write-ups ask for - a stated directory boundary - applied to write tools whose verbs and path parameters otherwise match the write-sink class",
+  "tools": [
+    {
+      "name": "save_note",
+      "description": "Save a note to a file. Writes are confined to the workspace directory.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "path": { "type": "string" }, "text": { "type": "string" } }
+      }
+    },
+    {
+      "name": "export_report",
+      "description": "Export a report. The output path is restricted to the configured export directory.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "output_path": { "type": "string" } }
+      }
+    },
+    {
+      "name": "upload_file",
+      "description": "Upload a file. Paths outside the upload directory are rejected.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "file_path": { "type": "string" } }
+      }
+    },
+    {
+      "name": "create_file",
+      "description": "Create a file at the given path, relative to the sandbox root.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "path": { "type": "string" } }
+      }
+    }
+  ],
+  "expect": []
+}

@@ -8,6 +8,20 @@ not earn a version.
 
 ### Added
 
+- **`slopscan config <mcp-config.json>`**: reads the `mcpServers`/`servers` blocks that Claude
+  Desktop, Cursor, Windsurf and VS Code actually load - the format everyone uses and most scanners
+  misparse into a wall of NO_AUTH noise. Checks what each entry launches: `curl | sh` and friends
+  (MCP05), unpinned package fetches where `@latest` counts as unpinned (MCP04), plaintext secrets
+  in env (MCP01, values redacted everywhere including JSON output), filesystem handovers of `/`, a
+  home directory, or the docker socket (MCP02), plain-HTTP endpoints (MCP07). Transport rules
+  never fire on a stdio entry; every report says what was evaluated and what was not. High
+  findings exit 1 - a config is a gate. `--probe` also starts each stdio server with its declared
+  env and runs the full scan/pin/drift pipeline against what it really exposes.
+- **`unchecked-path-write` rule** (MCP02): the write-sink blind spot of 2026's path-traversal CVEs
+  (CVE-2026-27825, CVSS 9.1, and three siblings) - a caller-controlled path parameter, a
+  materializing verb, and a description that never states a directory boundary. The fix the
+  write-ups ask for silences the rule, so the finding teaches its own remediation. Corpus entries
+  cover both directions: the CVE shape, and bounded write tools that must stay quiet.
 - **`slopscan policy <id>`**: writes a tapelog policy pack from a scan - hostile metadata denied,
   destructive/financial/execute confirmed, clean reads allowed, unlisted tools confirmed by
   default. The generated pack is accepted by tapelog's own `policy test` (verified against it):
